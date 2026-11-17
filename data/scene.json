@@ -1,0 +1,28 @@
+{
+  "version": "pop-v1.0-local",
+  "title": "京东 POP 商家资质审核驳回外呼",
+  "identity": "您好，我是京东商家资质审核的智能语音助手。",
+  "domain_words": {"京卖": "京麦", "精麦": "京麦", "驳回单具": "驳回单据", "受权书": "授权书", "盖张": "盖章", "精东": "京东"},
+  "opening": "请问您是商家的负责人吗？",
+  "cases": [
+    {"id":"POP-001","merchant":"星河商贸","brand":"青屿","name":"授权资质缺失","route":"phone","scene_row":18,"reason":"申请的青屿品牌缺少有效的品牌授权书","action":"在京麦打开驳回单据，在授权书位置补传有效授权书后重新提交","scope":["authorization"],"attempt":1},
+    {"id":"POP-002","merchant":"禾木商贸","brand":"蓝杉","name":"商标持有人不一致","route":"phone","scene_row":19,"reason":"申请单的商标持有人与商标网公示的信息不一致","action":"核对商标网登记的持有人，更新申请单和匹配的商标文件后重新提交","scope":["trademark"],"attempt":1},
+    {"id":"POP-003","merchant":"晴川商贸","brand":"小川","name":"店铺名称不规范","route":"phone","scene_row":64,"reason":"入驻申请填写的店铺名称不符合命名规范","action":"按驳回单据提示更正店铺名称后重新提交","scope":["shop"],"attempt":1},
+    {"id":"POP-004","merchant":"新桥商贸","brand":"知谷","name":"资料需要复核","route":"jingmai","scene_row":15,"reason":"现有资料存在需要复核的修改痕迹","action":"请在京麦查看书面意见并补充真实、完整的材料","scope":[],"attempt":1},
+    {"id":"POP-005","merchant":"长风商贸","brand":"山岚","name":"第二次提交材料有误","route":"phone","scene_row":71,"reason":"本次行业资质上传的位置有误","action":"按照驳回单据提示，在对应资质栏重新上传后提交","scope":["authorization"],"attempt":2},
+    {"id":"POP-006","merchant":"海棠商贸","brand":"东岸","name":"商家申请回电","route":"jingmai","scene_row":15,"reason":"资料一致性需要重新核对","action":"请根据驳回单据的书面意见整理对应材料","scope":[],"attempt":1,"callback_requested":true},
+    {"id":"POP-007","merchant":"晨光商贸","brand":"原野","name":"第三次出现同类问题","route":"phone","scene_row":18,"reason":"连续三次缺少申请所需资质","action":"补齐驳回单据中列出的资质后重新提交","scope":["authorization"],"attempt":3},
+    {"id":"POP-008","merchant":"云间商贸","brand":"听涛","name":"授权书缺少盖章","route":"phone","scene_row":79,"reason":"上传的授权书缺少授权方盖章","action":"向授权方索取盖章的授权书，在驳回单据中替换后重新提交","scope":["authorization"],"attempt":1},
+    {"id":"POP-009","merchant":"白帆商贸","brand":"归湾","name":"品牌方未确认授权","route":"phone","scene_row":28,"reason":"","action":"","scope":["authorization"],"attempt":1}
+  ],
+  "faq": [
+    {"id":"upload","scopes":["authorization"],"question":"授权资料应该在哪里上传","aliases":["在哪上传","哪里上传","怎么上传","什么位置上传","上传联系方式","授权书位置","上传到哪"],"answer":"请在京麦打开原驳回单据，在授权书对应的位置上传或替换材料，然后重新提交。","source":"驳回外呼QA.xlsx · 高频QA!2"},
+    {"id":"check_contact","scopes":["authorization"],"question":"和哪位授权方人员核实","aliases":["谁核实","和谁核实","核实的人","授权方核实"],"answer":"您可以向授权方确认授权信息。涉及具体人员的联系方式，请通过京麦客服核实。","source":"驳回外呼QA.xlsx · 高频QA!3"},
+    {"id":"employment","scopes":["authorization"],"question":"哪些材料可作在职证明","aliases":["在职证明","任职证明","官方邮箱","企业微信认证"],"answer":"可准备有企业微信认证或使用品牌方官方邮箱的证明，具体以单据要求和审核结果为准。","source":"驳回外呼QA.xlsx · 高频QA!4"},
+    {"id":"shop_name","scopes":["shop"],"question":"店铺名称在哪里修改","aliases":["修改店铺名称","店铺名怎么","改店铺名","店名怎么","店名在哪"],"answer":"可在京麦找客服，进入咨询单客服创建，选择店铺运营类的修改店铺名称。","source":"驳回外呼QA.xlsx · 高频QA!5"},
+    {"id":"holder","scopes":["trademark"],"question":"商标持有人是否需要一致","aliases":["谁的商标","持有人一样","持有人一致","品牌库持有人"],"answer":"需要提供与所申请品牌信息一致的商标文件，请核对商标文件和登记的持有人。","source":"驳回外呼QA.xlsx · 高频QA!9"},
+    {"id":"approval","scopes":["*"],"question":"补上资质是不是一定能通过","aliases":["能通过","包通过","保证通过","能过吗","一定过","肯定能过","一定能过","就能过","一次通过"],"answer":"补齐后还需要以新提交材料的实际审核结果为准，暂时无法承诺通过。","source":"驳回外呼QA.xlsx · 高频QA!12"},
+    {"id":"review","scopes":["*"],"question":"多久才会审核 怎么查询进度","aliases":["审核多久","多久审核","什么时候审核","审核进度","多长时间审核","几天可以"],"answer":"审核进度以京麦对应单据显示为准。这通电话无法确认具体完成时间。","source":"比赛模拟口径 · 进度与承诺边界"},
+    {"id":"resubmit","scopes":["*"],"question":"怎么重新提交","aliases":["重新提交","怎么提交","提交入口","如何重新提交"],"answer":"请按京麦驳回单据中的意见完成修改，在该申请的对应入口重新提交。","source":"赛题数据说明.docx · 业务链路"}
+  ]
+}

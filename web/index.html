@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>智语外呼 · 比赛工作台</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <aside class="rail">
+    <div class="brand"><span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span>智语外呼<small>比赛工作台</small></span></div>
+    <nav aria-label="工作台">
+      <button data-page="work" class="selected"><span aria-hidden="true">◈</span>实时外呼</button>
+      <button data-page="history"><span aria-hidden="true">▤</span>通话质检</button>
+      <button data-page="rsi"><span aria-hidden="true">↻</span>自进化评测</button>
+    </nav>
+    <div class="rail-bottom"><span class="dot"></span>本地比赛沙箱</div>
+  </aside>
+  <main>
+    <header class="top">
+      <div><span class="top-label">场景</span><span id="scene">京东 POP 商家资质审核驳回外呼</span></div>
+      <span id="readiness" class="chip pending">检查语音服务</span>
+    </header>
+    <section id="work" class="page">
+      <div class="heading"><div><h1>实时外呼</h1><p>选择一份模拟单据，通过浏览器完成商家通知与结果登记。</p></div><span class="chip neutral">模拟数据</span></div>
+      <div class="flow" aria-label="任务流程">
+        <span data-stage="opening"><i></i>开场</span><span data-stage="identity"><i></i>身份确认</span>
+        <span data-stage="needs"><i></i>需求确认</span><span data-stage="offer"><i></i>整改沟通</span>
+        <span data-stage="confirm"><i></i>结果确认</span><span data-stage="writeback"><i></i>回写</span>
+      </div>
+      <div class="work-grid">
+        <div class="column">
+          <section class="card call-panel">
+            <div class="card-heading"><h2>模拟任务</h2><span id="route" class="chip neutral">选择单据</span></div>
+            <label for="case">资审单据</label>
+            <select id="case" disabled><option>正在加载任务</option></select>
+            <label class="record"><input type="checkbox" id="record">保存本次模拟录音</label>
+            <div class="buttons">
+              <button id="start" class="primary" disabled>开始语音外呼</button>
+              <button id="text-start" class="secondary" disabled>人工输入（文字）</button>
+            </div>
+            <div id="live-actions" class="buttons" hidden>
+              <button id="microphone" class="secondary" hidden>开启麦克风</button>
+              <button id="no-answer" class="secondary">模拟未接通</button>
+              <button id="hangup" class="danger">结束通话</button>
+            </div>
+          </section>
+          <section class="wave-card" aria-label="实时音频状态">
+            <div class="wave-head"><span><i id="live-dot"></i><b id="call-status">等待发起</b></span><time id="clock">00:00</time></div>
+            <canvas id="wave" width="440" height="100" aria-hidden="true"></canvas>
+            <div class="wave-stats"><div><span>播放响应 P50</span><strong id="live-latency">—</strong></div><div><span>打断</span><strong id="live-interrupt">0 次</strong></div></div>
+          </section>
+          <section id="receipt" class="card receipt" hidden>
+            <div class="card-heading"><h2>回写结果</h2><span class="chip ok" id="outcome"></span></div>
+            <div id="receipt-body"></div>
+            <button id="open-quality" class="link-button">查看本通质检 →</button>
+          </section>
+        </div>
+        <section class="card transcript-card">
+          <div class="card-heading"><div><h2 id="dialog-title">实时转写</h2><p id="dialog-hint">开始通话后查看语音、业务节点和知识依据。</p></div><span id="mode" class="chip neutral">WebRTC</span></div>
+          <div id="messages" class="messages" role="log" aria-live="polite">
+            <div class="empty" id="call-empty"><span class="empty-icon" aria-hidden="true">⌁</span><p>等待通话</p><small>语音识别结果将在这里显示</small></div>
+          </div>
+          <div id="partial" class="partial" role="status" hidden></div>
+          <details id="manual-example" class="manual-example" hidden>
+            <summary>POP-001 测试示例</summary>
+            <ol>
+              <li>我是商家负责人。</li>
+              <li>可以，请说明驳回原因。</li>
+              <li>授权书在哪里上传？</li>
+              <li>我明白了，会补齐材料。</li>
+            </ol>
+          </details>
+          <form id="text-form" class="text-form" hidden>
+            <input id="message-input" maxlength="400" placeholder="输入模拟商家回复" aria-label="模拟商家回复" required>
+            <button id="text-send" type="submit" class="primary">发送</button>
+          </form>
+          <p id="work-error" class="error" role="alert" hidden></p>
+        </section>
+      </div>
+    </section>
+    <section id="history" class="page" hidden>
+      <div class="heading"><div><h1>通话质检</h1><p>核对任务回写、完整转写和语音链路指标。</p></div><button id="refresh" class="secondary">刷新</button></div>
+      <div id="metrics" class="metrics"></div>
+      <div class="history-grid">
+        <section class="card"><h2>最近通话</h2><div id="call-list" class="call-list"></div></section>
+        <section class="card" id="quality"><h2>质检详情</h2><p class="hint">选择一条通话查看。</p></section>
+      </div>
+    </section>
+    <section id="rsi" class="page" hidden>
+      <div class="heading"><div><h1>自进化评测</h1><p>从失败用例归因并生成候选知识补丁，通过回归后才启用。</p></div><button id="run-rsi" class="primary">运行一轮 RSI</button></div>
+      <section class="card rsi-current"><div><span class="top-label">当前知识版本</span><strong id="revision">—</strong></div><button id="rollback" class="secondary">回滚至基线</button></section>
+      <p id="rsi-status" class="hint" aria-live="polite"></p>
+      <div id="rsi-list"></div>
+    </section>
+  </main>
+  <audio id="remote" autoplay playsinline></audio>
+</body>
+</html>
