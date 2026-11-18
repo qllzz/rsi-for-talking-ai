@@ -10,12 +10,22 @@ const live = {mode: null, id: null, pc: null, dc: null, sender: null, mic: null,
 let ready = false;
 let taskList = [];
 let qualityId = null;
+let taskRoute = "all";
+let callRecords = [];
+let historyRequest = 0;
 
 async function request(url, body) {
-  const response = await fetch(url, body === undefined ? {} : {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
-  });
-  const data = await response.json();
+  let response;
+  try {
+    response = await fetch(url, body === undefined ? {} : {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+    });
+  } catch {
+    throw new Error("无法连接本地服务，请确认程序正在运行后重试。");
+  }
+  let data;
+  try { data = await response.json(); }
+  catch { throw new Error("服务暂时不可用，请稍后重试。"); }
   if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "请求未完成");
   return data;
 }
@@ -33,8 +43,50 @@ function navigate(name) {
     button.classList.toggle("selected", button.dataset.page === name);
     button.setAttribute("aria-current", button.dataset.page === name ? "page" : "false");
   }
+  $("page-name").textContent = {work: "外呼工作台", history: "通话记录", rsi: "知识评测"}[name];
   if (name === "history") readHistory().catch(showQualityError);
-  if (name === "rsi") readRsi().catch((e) => { $("rsi-status").textContent = e.message; });
+  if (name === "rsi") readRsi().catch((e) => rsiStatus(e.message));
+}
+
+function renderTasks() {
+  const query = $("task-search").value.trim().toLowerCase();
+  const tasks = taskList.filter((task) => (taskRoute === "all" || task.route === taskRoute)
+    && [task.id, task.title, task.merchant].join(" ").toLowerCase().includes(query));
+  $("task-count").textContent = tasks.length;
+  const rows = tasks.map((task) => {
+    const selected = task.id === $("case").value;
+    const button = element("button", "task-row" + (selected ? " active" : ""));
+    button.setAttribute("aria-pressed", String(selected));
+    button.disabled = Boolean(live.mode);
+    button.dataset.caseId = task.id;
+    const top = element("span", "task-row-top");
+    top.append(element("span", "mono", task.id), element("span", "chip neutral", task.route === "phone" ? "电话" : "京麦"));
+    button.append(top, element("strong", "", task.merchant), element("small", "", task.title));
+    button.addEventListener("click", () => selectTask(task.id));
+    return button;
+  });
+  $("task-list").replaceChildren(...(rows.length ? rows : [element("p", "list-empty", "没有符合条件的任务")]));
+}
+
+function selectTask(id) {
+  if (live.mode || id === live.selected) return;
+  $("case").value = id;
+  for (const node of $("messages").querySelectorAll(".msg")) node.remove();
+  $("call-empty").hidden = false;
+  $("receipt").hidden = true;
+  $("manual-example").hidden = true;
+  $("mode").textContent = "未连接";
+  $("dialog-title").textContent = "通话记录";
+  $("dialog-hint").textContent = "选择任务并发起通话，查看实时沟通记录。";
+  $("clock").textContent = "00:00";
+  $("live-latency").textContent = "—";
+  $("live-interrupt").textContent = "0 次";
+  $("composer-idle").textContent = "通话接通后，可在此输入商家回复";
+  live.selected = id;
+  current("等待发起", false);
+  stages();
+  error();
+  renderRoute();
 }
 
 function renderRoute() {
@@ -46,6 +98,19 @@ function renderRoute() {
   $("text-start").disabled = Boolean(live.mode) || !phone || !ready;
   $("case").disabled = Boolean(live.mode) || !taskList.length;
   $("record").disabled = Boolean(live.mode) || !phone;
+  $("init-actions").hidden = Boolean(live.mode);
+  $("merchant-name").textContent = task?.merchant ?? "—";
+  $("case-number").textContent = task?.id ?? "—";
+  $("case-title").textContent = task?.title ?? "—";
+  $("case-attempt").textContent = task ? "第 " + task.attempt + " 次" : "—";
+  $("case-channel").textContent = phone ? "电话外呼" : "京麦书面处理";
+  $("route-note").textContent = phone
+    ? "先确认商家负责人身份，再说明审核意见与整改要求。沟通结束后自动登记处理结果。"
+    : "此单据按业务规则通过京麦书面处理。登记结果后，可在通话记录中核对回执。";
+  $("operation-note").textContent = live.mode
+    ? "通话进行中，结束后可切换其他单据。"
+    : phone ? "请允许浏览器播放音频，建议使用耳麦。" : "此任务无需建立语音通话。";
+  renderTasks();
 }
 
 function renderInputControls() {
@@ -53,6 +118,7 @@ function renderInputControls() {
   $("microphone").hidden = !active;
   $("microphone").disabled = live.micBusy;
   $("microphone").textContent = live.mic ? "关闭麦克风" : "开启麦克风";
+  $("composer-idle").hidden = active;
   if (!active) return;
   $("text-form").hidden = false;
   $("manual-example").hidden = live.selected !== "POP-001";
@@ -67,13 +133,14 @@ function error(message = "") {
   $("work-error").hidden = !message;
 }
 
-function bubble(role, text, source, answerModel) {
+function bubble(role, text, source, answerModel, timestamp) {
   const user = role === "user";
   const outer = element("div", "msg " + role);
   const description = element("div");
-  const speaker = user ? "模拟商家" : (answerModel ? "智能语音助手 · AI 辅助" : "智能语音助手");
-  description.append(element("div", "msg-head", speaker),
-    element("div", "msg-body", text));
+  const head = element("div", "msg-head", user ? "商家" : "语音助手");
+  if (answerModel) head.append(element("span", "chip neutral", "模型辅助"));
+  if (timestamp) head.append(element("time", "", timestamp));
+  description.append(head, element("div", "msg-body", text));
   if (source) description.append(element("small", "msg-source", source));
   outer.append(element("div", "avatar", user ? "商" : "智"), description);
   return outer;
@@ -81,7 +148,7 @@ function bubble(role, text, source, answerModel) {
 
 function append(role, text, source, answerModel) {
   $("call-empty").hidden = true;
-  $("messages").append(bubble(role, text, source, answerModel));
+  $("messages").append(bubble(role, text, source, answerModel, $("clock").textContent));
   $("messages").scrollTop = $("messages").scrollHeight;
 }
 
@@ -111,6 +178,8 @@ function prepare(mode) {
   $("dialog-title").textContent = mode === "voice" ? "实时转写" : "对话记录";
   $("dialog-hint").textContent = mode === "voice" ? "正在建立语音连接。" : "正在登记京麦结果。";
   $("message-input").value = "";
+  $("composer-idle").hidden = false;
+  $("composer-idle").textContent = "正在建立连接…";
   $("manual-example").open = false;
   Object.assign(live, {mode, id: null, closing: false, done: false, start: performance.now(),
     speaking: false, lastMic: null, end: null, waiting: null, latencies: [], interrupts: 0, lastStats: 0,
@@ -135,13 +204,14 @@ function reply(data) {
   live.done = true;
   qualityId = live.id;
   $("outcome").textContent = statusText[data.disposition] ?? data.disposition;
+  $("outcome").className = "chip " + (["notified", "jingmai"].includes(data.disposition) ? "ok" : "neutral");
   $("receipt-body").textContent = [live.selected, data.receipt, data.ticket].filter(Boolean).join(" · ");
   $("receipt").hidden = false;
   $("no-answer").disabled = true;
   $("text-form").hidden = true;
   $("manual-example").hidden = true;
   renderInputControls();
-  if (live.mode === "text") disconnect("模拟任务已登记");
+  if (live.mode === "text") disconnect("处理结果已登记");
 }
 
 function send(type, properties = {}) {
@@ -180,12 +250,12 @@ function voiceMessage({data: raw}) {
       break;
     case "audio_end":
       if (live.done) {
-        current("模拟任务已登记");
+        current("处理结果已登记");
         live.drain = performance.now();
         clearTimeout(live.drainTimer);
         const pc = live.pc;
         live.drainTimer = setTimeout(() => {
-          if (live.pc === pc && live.drain !== null) disconnect("模拟任务已登记");
+          if (live.pc === pc && live.drain !== null) disconnect("处理结果已登记");
         }, 2200);
       } else current("等待商家回应");
       break;
@@ -334,6 +404,12 @@ async function disconnect(label) {
   $("manual-example").hidden = true;
   $("partial").hidden = true;
   $("microphone").hidden = true;
+  $("composer-idle").hidden = false;
+  $("composer-idle").textContent = live.done ? "本次处理已结束，可查看质检或发起新的通话" : "通话接通后，可在此输入商家回复";
+  $("mode").textContent = live.done ? "已结束" : "未连接";
+  $("dialog-hint").textContent = live.done
+    ? "本次处理已结束，可查看质检详情或发起新的通话。"
+    : "连接已结束，可以重新发起通话。";
   current(label, false);
   live.pc = null;
   live.dc = null;
@@ -388,7 +464,7 @@ function tick(now) {
   const output = rms(live.outbound);
   if (output > .008) live.lastOutput = now;
   if (live.drain !== null && now - live.drain >= 480 && now - live.lastOutput >= 160) {
-    disconnect("模拟任务已登记");
+    disconnect("处理结果已登记");
   }
   if (live.speaking && input > .009) live.lastMic = now;
   if (live.waiting && now - live.waiting.at > 7000) live.waiting = null;
@@ -411,7 +487,7 @@ function tick(now) {
   }
   wave.clearRect(0, 0, 440, 100);
   const energy = Math.min(1, Math.max(input, output) * 12);
-  wave.fillStyle = output > input ? "#76adff" : "#79ddce";
+  wave.fillStyle = output > input ? "#668ac0" : "#7c9e93";
   for (let index = 0; index < 48; index++) {
     const shape = Math.sin(Math.PI * index / 48);
     const signal = .35 + Math.abs(Math.sin(index * 1.52 + now / 95)) * .65;
@@ -422,8 +498,8 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 
-function metric(label, value, card = true) {
-  const node = element("div", card ? "card metric" : "metric");
+function metric(label, value) {
+  const node = element("div", "metric");
   node.append(element("span", "", label), element("strong", "", value));
   return node;
 }
@@ -431,18 +507,55 @@ function metric(label, value, card = true) {
 const ms = (value) => value == null ? "—" : value + " ms";
 
 async function readHistory() {
+  const sequence = ++historyRequest;
   const [list, stats] = await Promise.all([request("/api/calls"), request("/api/metrics")]);
-  $("metrics").replaceChildren(metric("任务闭环", stats.completed + " / " + stats.phone_finished),
+  if (sequence !== historyRequest) return;
+  callRecords = list;
+  $("metrics").replaceChildren(metric("完成通知 / 电话处理", stats.completed + " / " + stats.phone_finished),
     metric("播放 P50", ms(stats.client_p50)), metric("播放 P95", ms(stats.client_p95)),
     metric("严重输出违规", stats.violations));
+  await filterHistory();
+}
+
+async function filterHistory() {
+  const query = $("history-search").value.trim().toLowerCase();
+  const filter = $("history-filter").value;
+  const list = callRecords.filter((call) => {
+    const task = taskList.find((item) => item.id === call.case_id);
+    return (filter === "all" || (call.payload?.disposition ?? "pending") === filter)
+      && [call.case_id, call.id, task?.merchant ?? ""].join(" ").toLowerCase().includes(query);
+  });
+  $("history-count").textContent = list.length + " / " + callRecords.length + " 条";
+  if (!list.some((call) => call.id === qualityId)) qualityId = list[0]?.id ?? null;
   $("call-list").replaceChildren();
-  if (!list.length) $("call-list").append(element("p", "hint", "暂无通话记录。"));
+  if (!list.length) {
+    const row = element("tr");
+    const cell = element("td", "list-empty", callRecords.length ? "没有符合条件的通话记录" : "暂无通话记录，完成一次外呼后会显示在这里");
+    cell.colSpan = 4;
+    row.append(cell);
+    $("call-list").append(row);
+    $("quality").replaceChildren(element("div", "panel-heading", "质检详情"),
+      element("div", "empty", "暂无可查看的通话"));
+    return;
+  }
   for (const call of list) {
-    const row = element("button", "call-row" + (qualityId === call.id ? " active" : ""));
-    const details = element("span", "", call.case_id + (call.mode === "voice" ? " · 语音" : " · 文字"));
-    details.append(element("small", "", new Date(call.started * 1000).toLocaleString("zh-CN")));
-    row.append(details, element("span", "chip neutral", statusText[call.payload?.disposition] || "处理中"));
-    row.addEventListener("click", () => { qualityId = call.id; readHistory().catch(showQualityError); });
+    const row = element("tr", qualityId === call.id ? "active" : "");
+    const task = taskList.find((item) => item.id === call.case_id);
+    const details = element("td", "mono", call.case_id);
+    details.append(element("small", "", (task?.merchant ?? "") + " · " + (call.mode === "voice" ? "语音" : "文字")));
+    const date = new Date(call.started * 1000);
+    const time = element("td", "date-cell", date.toLocaleDateString("zh-CN", {month: "2-digit", day: "2-digit"}));
+    time.append(element("small", "", date.toLocaleTimeString("zh-CN", {hour12: false})));
+    const status = element("td");
+    status.append(element("span", "chip " + (call.payload?.disposition === "notified" ? "ok" : "neutral"),
+      statusText[call.payload?.disposition] || "未回写"));
+    const action = element("td");
+    const button = element("button", "row-link", "查看");
+    button.setAttribute("aria-label", "查看 " + call.case_id + " " + date.toLocaleTimeString("zh-CN") + " 的质检");
+    button.setAttribute("aria-pressed", String(qualityId === call.id));
+    button.addEventListener("click", () => { qualityId = call.id; filterHistory().catch(showQualityError); });
+    action.append(button);
+    row.append(details, time, status, action);
     $("call-list").append(row);
   }
   if (qualityId) await readQuality(qualityId);
@@ -453,25 +566,33 @@ function showQualityError(exc) { $("quality").replaceChildren(element("p", "erro
 async function readQuality(id) {
   const report = await request("/api/calls/" + id + "/quality");
   if (id !== qualityId) return;
-  const tags = element("div", "quality-meta");
-  for (const label of ["阶段 " + report.stages.length + " / 6", "轮次 " + report.turns,
-    "打断 " + report.audio.interruptions, "拦截 " + report.compliance_intercepted,
-    "播放 P50 " + ms(report.audio.client_p50), "出包 P50 " + ms(report.audio.server_p50)]) {
-    tags.append(element("span", "chip neutral", label));
+  const tags = element("dl", "quality-meta");
+  for (const [label, value] of [["任务阶段", report.stages.length + " / 6"], ["沟通轮次", report.turns],
+    ["播报打断", report.audio.interruptions], ["合规拦截", report.compliance_intercepted],
+    ["播放 P50", ms(report.audio.client_p50)], ["出包 P50", ms(report.audio.server_p50)]]) {
+    const field = element("div");
+    field.append(element("dt", "", label), element("dd", "", value));
+    tags.append(field);
   }
   const exports = element("div", "exports");
-  for (const [suffix, label] of [["trace", "下载原始日志"], ...(report.recording ? [["audio", "下载比赛录音"]] : [])]) {
+  for (const [suffix, label] of [["trace", "下载原始日志"], ...(report.recording ? [["audio", "下载通话录音"]] : [])]) {
     const link = element("a", "", label);
     link.href = "/api/calls/" + id + "/" + suffix;
     exports.append(link);
   }
   const transcript = element("div", "detail-transcript");
   for (const line of report.transcript) transcript.append(bubble(line.role, line.text, line.source, line.answer_model));
-  const evidence = report.receipt ? report.receipt + (report.ticket ? " · " + report.ticket : "") : "回写等待中";
+  const evidence = report.receipt ? "回执 " + report.receipt + (report.ticket ? " · 工单 " + report.ticket : "") : "此通话尚未回写";
   const stats = report.audio.rtc_stats;
-  const transport = stats ? element("p", "hint", "WebRTC 抖动 " + ms(stats.jitter_ms) + " · 丢包 " + (stats.loss ?? "—")) : null;
-  $("quality").replaceChildren(element("h2", "", "质检详情"), tags, element("p", "hint", evidence),
-    ...(transport ? [transport] : []), exports, transcript);
+  const header = element("div", "panel-heading");
+  const title = element("div");
+  title.append(element("h2", "", "质检详情 · " + report.case_id), element("p", "mono", "会话 " + id.slice(0, 12)));
+  header.append(title, element("span", "chip " + (report.complete ? "ok" : "neutral"), statusText[report.result?.disposition] ?? "未回写"));
+  const info = element("div", "quality-evidence");
+  info.append(element("p", "mono", evidence));
+  if (stats) info.append(element("p", "", "WebRTC 抖动 " + ms(stats.jitter_ms) + " · 丢包 " + (stats.loss ?? "—")));
+  info.append(exports);
+  $("quality").replaceChildren(header, tags, info, transcript);
 }
 
 async function readRsi() {
@@ -479,23 +600,32 @@ async function readRsi() {
   $("revision").textContent = data.active;
   $("rollback").disabled = data.active === "baseline";
   $("rsi-list").replaceChildren();
+  if (!data.history.length) $("rsi-list").append(element("div", "empty", "暂无评测记录，点击右上角运行评测。"));
   for (const run of data.history) {
-    const card = element("article", "card rsi-run");
-    const heading = element("div", "card-heading");
-    heading.append(element("h2", "", run.id), element("span", "chip " + (run.activated ? "ok" : "neutral"),
-      run.activated ? "通过回归" : "保留当前版本"));
+    const card = element("details", "rsi-run");
+    card.open = data.history[0] === run;
+    const heading = element("summary");
+    heading.append(element("span", "mono", run.id), element("span", "chip " + (run.activated ? "ok" : "neutral"),
+      run.id === data.active ? "当前使用" : run.activated ? "回归通过" : "保留当前版本"));
     const metrics = element("div", "metrics");
     for (const [group, label] of [["dev", "开发集"], ["regression", "回归集"], ["holdout", "封存集"]]) {
       const before = run.summary[group + "_before"];
       const after = run.summary[group + "_after"];
-      metrics.append(metric(label + " · " + before.count + " 条", before.passed + " → " + after.passed, false));
+      metrics.append(metric(label + " · " + before.count + " 条", before.passed + " → " + after.passed));
     }
     const link = element("a", "link-button", "下载评测记录");
     link.href = "/api/rsi/" + run.id + "/trace";
     const patch = Object.entries(run.patch).map(([id, words]) => id + " · " + words.join("、")).join(" ｜ ");
-    card.append(heading, element("p", "hint", patch || "本轮无可验证的新补丁。"), metrics, link);
+    const content = element("div");
+    content.append(element("p", "hint", patch ? "新增匹配词：" + patch : "本轮无可验证的新补丁。"), metrics, link);
+    card.append(heading, content);
     $("rsi-list").append(card);
   }
+}
+
+function rsiStatus(text) {
+  $("rsi-status").textContent = text;
+  $("rsi-status").hidden = !text;
 }
 
 function run(handler) {
@@ -508,7 +638,18 @@ function run(handler) {
   };
 }
 
-$("case").addEventListener("change", renderRoute);
+$("case").addEventListener("change", () => selectTask($("case").value));
+$("task-search").addEventListener("input", renderTasks);
+for (const button of document.querySelectorAll("[data-route]")) button.addEventListener("click", () => {
+  taskRoute = button.dataset.route;
+  for (const filter of document.querySelectorAll("[data-route]")) {
+    filter.classList.toggle("selected", filter === button);
+    filter.setAttribute("aria-pressed", String(filter === button));
+  }
+  renderTasks();
+});
+$("history-search").addEventListener("input", () => filterHistory().catch(showQualityError));
+$("history-filter").addEventListener("change", () => filterHistory().catch(showQualityError));
 $("start").addEventListener("click", run(() => startVoice(true)));
 $("text-start").addEventListener("click", run(() => startVoice(false)));
 $("microphone").addEventListener("click", run(() => setMicrophone(!live.mic)));
@@ -537,37 +678,56 @@ $("text-form").addEventListener("submit", (event) => {
   })();
 });
 for (const nav of document.querySelectorAll("nav button")) nav.addEventListener("click", () => navigate(nav.dataset.page));
-$("open-quality").addEventListener("click", () => navigate("history"));
+$("open-quality").addEventListener("click", () => {
+  $("history-search").value = "";
+  $("history-filter").value = "all";
+  navigate("history");
+});
 $("refresh").addEventListener("click", () => readHistory().catch(showQualityError));
 $("run-rsi").addEventListener("click", async () => {
   $("run-rsi").disabled = true;
-  $("rsi-status").textContent = "正在重放开发集、回归集和封存集…";
+  rsiStatus("正在重放开发集、回归集和封存集…");
   try {
     const result = await request("/api/rsi/run", {});
     await readRsi();
-    $("rsi-status").textContent = result.activated ? "回归通过，后续通话将使用新版本。" : "已完成评测，当前版本继续生效。";
-  } catch (err) { $("rsi-status").textContent = err.message; }
+    rsiStatus(result.activated ? "回归通过，后续通话将使用新版本。" : "已完成评测，当前版本继续生效。");
+  } catch (err) { rsiStatus(err.message); }
   finally { $("run-rsi").disabled = false; }
 });
 $("rollback").addEventListener("click", async () => {
-  try { await request("/api/rsi/rollback", {revision: "baseline"}); await readRsi(); $("rsi-status").textContent = "已恢复基线。"; }
-  catch (err) { $("rsi-status").textContent = err.message; }
+  try { await request("/api/rsi/rollback", {revision: "baseline"}); await readRsi(); rsiStatus("已恢复基线。"); }
+  catch (err) { rsiStatus(err.message); }
 });
 window.addEventListener("pagehide", () => {
   if (live.mode === "voice" && live.id) navigator.sendBeacon("/api/calls/" + live.id + "/close");
 });
 
-Promise.all([request("/api/status"), request("/api/cases")]).then(([status, tasks]) => {
-  ready = status.voice;
-  taskList = tasks;
-  $("scene").textContent = status.scene;
-  $("readiness").textContent = ready ? "离线语音就绪" : "语音模型未就绪";
-  $("readiness").className = "chip " + (ready ? "ok" : "pending");
-  $("case").replaceChildren(...tasks.map((task) => {
-    const option = element("option", "", task.id + " · " + task.title);
-    option.value = task.id;
-    return option;
-  }));
-  renderRoute();
-}).catch((err) => error(err.message));
+function loadWorkbench() {
+  error();
+  $("readiness").textContent = "正在连接服务";
+  $("task-list").replaceChildren(element("p", "list-empty", "正在加载任务…"));
+  return Promise.all([request("/api/status"), request("/api/cases")]).then(([status, tasks]) => {
+    ready = status.voice;
+    taskList = tasks;
+    $("scene").textContent = status.scene;
+    $("readiness").textContent = ready ? "离线语音就绪" : "语音模型未就绪";
+    $("readiness").className = "service-status " + (ready ? "ok" : "pending");
+    $("case").replaceChildren(...tasks.map((task) => {
+      const option = element("option", "", task.id + " · " + task.title);
+      option.value = task.id;
+      return option;
+    }));
+    renderRoute();
+  }).catch((err) => {
+    $("readiness").textContent = "服务未连接";
+    $("readiness").className = "service-status pending";
+    const failure = element("div", "load-error");
+    const retry = element("button", "secondary compact", "重新连接");
+    retry.addEventListener("click", loadWorkbench);
+    failure.append(element("p", "hint", "任务加载失败"), retry);
+    $("task-list").replaceChildren(failure);
+    error(err.message);
+  });
+}
+loadWorkbench();
 requestAnimationFrame(tick);

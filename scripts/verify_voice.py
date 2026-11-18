@@ -18,7 +18,7 @@ from zhiyu.audio import SpeechModels, pcm
 from zhiyu.knowledge import compact
 
 LINES = [
-    "我是商家负责人。",
+    "是的，我是这家店的负责人，请讲。",
     "可以，请给我说明驳回的原因。",
     "请问授权书要在哪里上传？",
     "好的，我明白了。",
@@ -237,7 +237,7 @@ def run(args):
         expect(page.locator("#start")).to_be_enabled(timeout=18000)
         page.screenshot(path=output / "workbench.png")
         page.locator("#open-quality").click()
-        expect(page.get_by_role("link", name="下载比赛录音")).to_be_visible(timeout=10000)
+        expect(page.get_by_role("link", name="下载通话录音")).to_be_visible(timeout=10000)
         page.screenshot(path=output / "quality.png")
         if args.video:
             page.wait_for_timeout(3100)
