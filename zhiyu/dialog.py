@@ -13,10 +13,15 @@ FORBIDDEN = re.compile(r"保证.{0,5}通过|我.{0,2}保证|百分之百.{0,3}�
 PROBE = re.compile(r"(忽略|跳过).{0,10}(指令|规则|核验)|系统提示词|别人.{0,8}(信息|手机号)|"
                    r"(完整|全部).{0,5}(手机|电话|证件|身份证).{0,3}(号码|号)|给我.{0,8}验证码")
 WRONG = re.compile(r"打错|找错|不是.{0,7}(负责人|商家|这里)|你找谁|不认识|不方便.{0,3}核实|不.{0,3}是我")
-IDENTITY = re.compile(r"^(喂|你好|您好|嗯|恩|啊|哎|唉|诶|对|是的)*\s*(我是.{0,8}(负责人|商家|店主)|"
-                      r"(对|是)的|对|没错|我就是|我负责|是我|是)$|我们是|本人就是")
+IDENTITY = re.compile(
+    r"^(?:喂|你好|您好|嗯|恩|啊|哎|唉|诶|对|是的)*"
+    r"(?:(?:我(?:本人)?|本人|我们)(?:就是|是)(?:这家店|该店|这家公司|该公司|本店|本公司|"
+    r"商家|这家商家|这家店铺|该店铺|店铺|公司)?的?(?:负责人|店主)|"
+    r"我是商家|对的|是的|对|没错|我就是|我负责|是我|是)"
+    r"(?:您说吧?|你说吧?|请说|请讲|说吧|什么事|请问有什么事)?$"
+)
 DEFER = re.compile(r"晚点|回电|稍后再|没空|再打|不[太]?方便|过会儿")
-ESCALATE = re.compile(r"转人工|人工客服|投诉|曝光|举报|找.{0,2}客服")
+ESCALATE = re.compile(r"转人工|接.{0,2}人工客服|找.{0,2}人工|人工客服$|我要.{0,2}投诉|投诉你|曝光|举报|^投诉$")
 ANGRY = re.compile(r"太离谱|太麻烦|不合理|烦死|生气|烦人|着急|怎么又")
 CONFIRM = re.compile(r"明白|清楚|知道了|好的|好$|会.{0,5}(补|改|提交)|"
                      r"听懂|我去(补|改)|我(补|改|提交)|就这么|嗯[，,。 ]*(行|对)")
@@ -33,11 +38,14 @@ def offer_script(case):
 
 
 def voice_templates(knowledge):
+    # Prewarm common replies and the stable first-line call cases. Other scenarios are
+    # synthesized on demand and share the bounded phrase cache during calls.
+    common_cases = {"POP-001", "POP-002", "POP-003", "POP-005", "POP-008"}
     return [
         knowledge.identity + knowledge.opening, VERIFY_OK, NOTIFIED,
         *filter(None, OPENINGS.values()),
-        *(offer_script(case) for case in knowledge.cases.values() if case.reason and case.action),
-        *(entry.answer + "请问还有其他疑问吗？" for entry in knowledge.entries.values()),
+        *(offer_script(case) for case in knowledge.cases.values() if case.id in common_cases and case.reason and case.action),
+        *(entry.answer + "请问还有其他疑问吗？" for entry in knowledge.entries.values() if not entry.source_rows),
         "我只能协助本次资质审核事项，无法提供这些信息。",
         "为保护商家信息，请先确认您是否是这家商家的负责人。",
         "我暂时无法确认这个问题。您是想核对驳回原因、整改操作，还是重新提交的步骤？",
@@ -52,7 +60,8 @@ def redact(text):
 
 
 class Dialogue:
-    def __init__(self, knowledge, tools, store, case_id, mode, resolver=None, session_id=None, *, answer_assistant=None):
+    def __init__(self, knowledge, tools, store, case_id, mode, resolver=None, session_id=None, *,
+                 answer_assistant=None, followup_ticket=None):
         self.knowledge = knowledge
         self.tools = tools
         self.store = store
@@ -69,6 +78,8 @@ class Dialogue:
         self.disposition = None
         self.receipt = None
         self.ticket = None
+        self.written = None
+        self.followup_ticket = followup_ticket
         self.pending_result = None
         self.stages = []
         self.last_entry = None
@@ -76,8 +87,13 @@ class Dialogue:
         self.unknown = 0
         self.identity_retries = 0
         self.opening_interrupted = False
-        self.channel = self.case.channel()
-        store.begin(self.id, case_id, mode, knowledge.revision)
+        self.channel = "phone" if followup_ticket else self.case.channel()
+        self.application = None
+        store.begin(self.id, case_id, mode, knowledge.revision, followup_ticket=followup_ticket)
+
+    def abandon(self):
+        if self.followup_ticket:
+            self.store.release_followup(self.id)
 
     def mark(self, *stages):
         for stage in stages:
@@ -104,7 +120,7 @@ class Dialogue:
             answer_model = None
         response = {"text": text, "intent": intent, "source": source, "reason": reason, "fact": fact,
                     "state": self.state, "turn": self.index, "stages": self.stages[:],
-                    "verified": self.verified, "receipt": self.receipt, "ticket": self.ticket,
+                    "verified": self.verified, "receipt": self.receipt, "ticket": self.ticket, "written": self.written,
                     "disposition": self.disposition}
         if answer_model:
             response["answer_model"] = answer_model
@@ -148,8 +164,10 @@ class Dialogue:
         if self.state != "idle":
             raise ValueError("会话已经开始")
         self.tool("lookup_list", self.tools.lookup_list, self.case.id)
+        self.store.log(self.id, "contact_plan", channel=self.channel, submission_attempt=self.case.attempt,
+                       contact_attempt=2 if self.followup_ticket else 1, followup_ticket=self.followup_ticket)
         if self.channel == "jingmai":
-            return self.finish("jingmai", "该任务按资审规则走京麦书面处理，已登记模拟结果。")
+            return self.finish("jingmai", "该单据已登记京麦书面处理。")
         self.mark("opening")
         self.state = "identity"
         return self.reply(self.knowledge.identity + self.knowledge.opening, "opening")
@@ -161,14 +179,18 @@ class Dialogue:
             self.offered = False
 
     def offer(self):
-        if not self.case.reason or not self.case.action:
+        case = self.application
+        if not case or not case.reason or not case.action:
+            return self.finish("handoff", "这条单据需要人工核实，我会登记转接。")
+        text = offer_script(case)
+        if FORBIDDEN.search(text) or SENSITIVE.search(text):
+            self.store.log(self.id, "compliance", action="blocked", severity="severe", reason="unsafe_case_content")
             return self.finish("handoff", "这条单据需要人工核实，我会登记转接。")
         self.mark("offer")
         self.offered = True
         self.state = "confirm"
-        text = offer_script(self.case)
-        self.last_factual_reply = (text, self.case.source)
-        return self.reply(text, "offer", self.case.source, fact=True)
+        self.last_factual_reply = (text, case.source)
+        return self.reply(text, "offer", case.source, fact=True)
 
     def finish(self, disposition, text):
         if self.state == "done":
@@ -182,10 +204,10 @@ class Dialogue:
             }
         disposition = self.pending_result["disposition"]
         try:
-            if disposition in {"callback", "handoff"}:
-                self.ticket = self.tool("create_ticket", self.tools.create_ticket,
-                                        self.id, self.case.id, disposition)
             self.receipt = self.tool("write_result", self.tools.write_result, self.pending_result)
+            artifacts = self.tools.result_artifacts(self.id)
+            self.ticket = artifacts["ticket"]
+            self.written = artifacts["written"]
         except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
             self.state = "write_pending"
             self.store.log(self.id, "failure", reason="write_failed", error=type(exc).__name__)
@@ -197,9 +219,9 @@ class Dialogue:
 
     def terminal(self, trigger):
         if self.state == "write_pending":
-            return self.finish(self.pending_result["disposition"], "工单已登记，感谢您的接听。")
+            return self.finish(self.pending_result["disposition"], "处理结果已登记。")
         if trigger == "no_answer" and not self.verified:
-            if self.case.attempt == 2 and self.channel == "phone":
+            if self.case.attempt == 2 and self.channel == "phone" and not self.followup_ticket:
                 return self.finish("callback", "电话未接通，已登记预约再次联系。")
             return self.finish("jingmai", "电话未接通，已登记京麦站内处理。")
         return self.finish("ended", "本次通话已结束。")
@@ -218,21 +240,27 @@ class Dialogue:
             self.store.log(self.id, "compliance", action="refused", severity="protected",
                            reason="untrusted_input")
             return self.reply("我只能协助本次资质审核事项，无法提供这些信息。", "protected")
+        if WRONG.search(key):
+            if self.verified:
+                self.verified = False
+                return self.finish("wrong_party", "收到您的更正。为保护业务信息，本次通话到此结束。")
+            return self.finish("wrong_party", "明白，打扰您了。感谢接听，再见。")
         if ESCALATE.search(key):
             return self.finish("handoff", "我理解您希望进一步核实，我会登记人工复核。")
         if DEFER.search(key):
             return self.finish("callback", "理解您现在不方便，我会登记后续回电需求。")
         if self.state == "identity":
             self.identity_retries += 1
-            if WRONG.search(key):
-                return self.finish("wrong_party", "明白，打扰您了。感谢接听，再见。")
             if self.opening_interrupted:
                 self.opening_interrupted = False
                 return self.reply(self.knowledge.identity + self.knowledge.opening, "opening")
-            if IDENTITY.search(key) or (self.case.merchant in key and "不是" not in key):
+            if IDENTITY.search(key):
+                try:
+                    self.application = self.tool("lookup_application", self.tools.lookup_application, self.case.id, True)
+                except (ValueError, KeyError, PermissionError, OSError, sqlite3.Error):
+                    return self.finish("handoff", "我暂时无法核对这条单据，已为您登记人工复核。")
                 self.verified = True
                 self.mark("identity")
-                self.tool("lookup_application", self.tools.lookup_application, self.case.id, self.verified)
                 self.state = "needs"
                 return self.reply(VERIFY_OK, "verify")
             if self.identity_retries >= 3:
@@ -240,9 +268,6 @@ class Dialogue:
             return self.reply("为保护商家信息，请先确认您是否是这家商家的负责人。", "verify_again")
         if self.state not in {"needs", "confirm"} or not self.verified:
             return self.reply("请先发起模拟通话。", "idle")
-        if WRONG.search(key):
-            self.verified = False
-            return self.finish("wrong_party", "收到您的更正。为保护业务信息，本次通话到此结束。")
         if self.state == "needs":
             if ANGRY.search(key) or NEED.search(key):
                 self.need_confirmed = True

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import time
 from contextlib import asynccontextmanager, suppress
@@ -14,9 +15,10 @@ from starlette.concurrency import run_in_threadpool
 
 from .answer import AnswerAssistant
 from .audio import SpeechModels, missing_models
+from .catalog import find_source, load_catalog
 from .dialog import Dialogue, voice_templates
 from .evaluation import Evolution
-from .knowledge import ROOT, REVISION
+from .knowledge import ROOT, REVISION, SCENE_PATH
 from .llm import LanguageModel
 from .quality import inspect, percentile
 from .rtc import VoiceCall
@@ -24,6 +26,20 @@ from .storage import CallResult, MockTools, Store
 
 RUNTIME = Path(os.environ.get("ZHIYU_RUNTIME", ROOT / "runtime")).resolve()
 WEB = ROOT / "web"
+
+
+def configured_catalog():
+    configured = os.environ.get("ZHIYU_RULES_FILE")
+    if configured:
+        path = Path(configured).expanduser()
+        if not path.is_file():
+            raise ValueError("ZHIYU_RULES_FILE 指定的资审工作簿不存在。")
+    else:
+        path = find_source(ROOT / "reference") or find_source(ROOT.parent)
+    if path is None:
+        return None
+    fixtures = json.loads(SCENE_PATH.read_text(encoding="utf-8"))["cases"]
+    return load_catalog(path, fixtures=fixtures)
 
 
 @dataclass
@@ -51,9 +67,17 @@ async def reap(service):
 
 @asynccontextmanager
 async def lifetime(service):
+    catalog = await asyncio.to_thread(configured_catalog)
     service.state.store = Store(RUNTIME / "calls.db")
     service.state.model = LanguageModel()
-    service.state.evolution = Evolution(RUNTIME / "evolution", service.state.model)
+    service.state.evolution = Evolution(RUNTIME / "evolution", service.state.model, catalog=catalog)
+    service.state.catalog = {
+        "ready": catalog is not None,
+        "total": len(catalog or ()),
+        "phone": sum(row["route"] == "phone" for row in catalog or ()),
+        "jingmai": sum(row["route"] == "jingmai" for row in catalog or ()),
+        "message": None if catalog is not None else "未找到资审关单场景话术 V1.0 原表，当前仅提供内置测试任务。",
+    }
     service.state.voice = {}
     service.state.text = {}
     service.state.speech = None
@@ -75,7 +99,7 @@ async def lifetime(service):
         service.state.model.close()
 
 
-api = FastAPI(title="智语外呼 · 本地比赛沙箱", version="1.0", lifespan=lifetime)
+api = FastAPI(title="智语外呼 · 资审服务工作台", version="1.1", lifespan=lifetime)
 api.mount("/assets", StaticFiles(directory=WEB), name="assets")
 
 
@@ -85,6 +109,7 @@ class Payload(BaseModel):
 
 class Start(Payload):
     case_id: str = Field(min_length=1, max_length=48)
+    followup_ticket: str | None = Field(default=None, pattern=r"^WK-[A-F0-9]{12}$")
 
 
 class Offer(Start):
@@ -121,14 +146,20 @@ def state():
     return api.state
 
 
-def new_dialog(case_id, mode):
+def new_dialog(case_id, mode, followup_ticket=None):
     services = state()
     knowledge = services.evolution.get()
     if case_id not in knowledge.cases:
-        raise HTTPException(404, "未知模拟任务")
-    return Dialogue(knowledge, MockTools(services.store, knowledge), services.store,
-                    case_id, mode, services.model.resolve if services.model.enabled else None,
-                    answer_assistant=services.answer if services.answer.enabled else None)
+        raise HTTPException(404, "未找到该资审任务")
+    if mode == "voice" and knowledge.cases[case_id].channel() != "phone" and not followup_ticket:
+        raise HTTPException(409, "该单据应通过京麦书面处理。")
+    try:
+        return Dialogue(knowledge, MockTools(services.store, knowledge), services.store,
+                        case_id, mode, services.model.resolve if services.model.enabled else None,
+                        answer_assistant=services.answer if services.answer.enabled else None,
+                        followup_ticket=followup_ticket)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
 
 
 async def text_action(call_id, method, value, **options):
@@ -163,14 +194,32 @@ def status():
     return {"voice": state().speech is not None, "missing": missing_models(), "llm": state().model.enabled,
             "model": state().model.model if state().model.enabled else None,
             "answer_model": state().answer.model if state().answer.enabled else None,
-            "revision": knowledge.revision, "scene": knowledge.title, "scene_version": knowledge.version}
+            "revision": knowledge.revision, "scene": knowledge.title, "scene_version": knowledge.version,
+            "catalog": state().catalog}
 
 
 @api.get("/api/cases")
 def cases():
+    results = state().store.latest_by_case()
     return [{"id": case.id, "title": case.name, "merchant": case.merchant,
-             "route": case.channel(), "attempt": case.attempt}
+             "route": case.channel(), "attempt": case.attempt, "categories": case.categories,
+             "source_kind": case.source_kind, "source_row": case.scene_row,
+             "source_cell": case.source_cell, "source_route": case.route,
+             "last_result": results.get(case.id)}
             for case in state().evolution.get().cases.values()]
+
+
+@api.get("/api/work-items")
+def work_items():
+    return state().store.work_items()
+
+
+@api.post("/api/work-items/{ticket_id}/resolve")
+def resolve_work_item(ticket_id: str):
+    try:
+        return state().store.resolve_handoff(ticket_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from None
 
 
 @api.get("/api/contracts/writeback")
@@ -186,8 +235,12 @@ async def offer(payload: Offer):
     active = sum(not call.closed for call in services.voice.values())
     if active >= 8:
         raise HTTPException(429, "模拟会话已达上限")
-    dialog = new_dialog(payload.case_id, "voice")
-    call = VoiceCall(dialog, services.speech, RUNTIME / "recordings", payload.record, payload.microphone)
+    dialog = new_dialog(payload.case_id, "voice", payload.followup_ticket)
+    try:
+        call = VoiceCall(dialog, services.speech, RUNTIME / "recordings", payload.record, payload.microphone)
+    except Exception:
+        dialog.abandon()
+        raise
     services.voice[dialog.id] = call
     try:
         answer = await asyncio.wait_for(call.negotiate(payload.sdp), 10)
@@ -223,9 +276,17 @@ async def close(call_id: str):
 async def text_start(payload: Start):
     if len(state().text) >= 32:
         raise HTTPException(429, "调试会话已达上限")
-    dialog = new_dialog(payload.case_id, "text")
+    dialog = new_dialog(payload.case_id, "text", payload.followup_ticket)
     state().text[dialog.id] = TextSession(dialog)
-    return {"session_id": dialog.id, **dialog.start()}
+    try:
+        response = await run_in_threadpool(dialog.start)
+    except Exception:
+        state().text.pop(dialog.id, None)
+        await run_in_threadpool(dialog.abandon)
+        raise
+    if response["state"] == "done":
+        state().text.pop(dialog.id, None)
+    return {"session_id": dialog.id, **response}
 
 
 @api.post("/api/text/{call_id}/turn")

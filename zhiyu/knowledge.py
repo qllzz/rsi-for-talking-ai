@@ -1,8 +1,10 @@
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from .faq_catalog import reviewed_faq
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENE_PATH = ROOT / "data" / "scene.json"
@@ -27,6 +29,9 @@ class Case:
     attempt: int
     callback_requested: bool = False
     complaint: bool = False
+    categories: list[str] = field(default_factory=list)
+    source_cell: str = ""
+    source_kind: str = "fixture"
 
     def channel(self) -> str:
         if self.callback_requested or self.complaint:
@@ -35,7 +40,8 @@ class Case:
 
     @property
     def source(self) -> str:
-        return f"资审关单场景话术V1.0.xlsx · 场景汇总!{self.scene_row}"
+        source = f"资审关单场景话术V1.0.xlsx · 场景汇总!{self.scene_row}"
+        return f"{source}（话术 {self.source_cell}）" if self.source_cell else source
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,7 @@ class Entry:
     aliases: list[str]
     answer: str
     source: str
+    source_rows: list[int] = field(default_factory=list)
 
 
 class Knowledge:
@@ -63,8 +70,17 @@ class Knowledge:
             self.entries[entry["id"]] = Entry(**{**entry, "aliases": [*entry["aliases"], *extra]})
 
     @classmethod
-    def load(cls, revision="baseline", aliases=None):
-        return cls(json.loads(SCENE_PATH.read_text(encoding="utf-8")), revision, aliases)
+    def load(cls, revision="baseline", aliases=None, *, catalog=None):
+        scene = json.loads(SCENE_PATH.read_text(encoding="utf-8"))
+        if catalog is not None:
+            fixtures = {item["id"]: item for item in scene["cases"]}
+            missing = {**fixtures["POP-009"], "id": "POP-TEST-MISSING", "name": "单据缺少可播报详情"}
+            scene["cases"] = [
+                *sorted(({**item, "source_kind": "reference"} for item in catalog), key=lambda item: item["id"]),
+                fixtures["POP-006"], fixtures["POP-007"], missing,
+            ]
+            scene["faq"].extend(reviewed_faq())
+        return cls(scene, revision, aliases)
 
     def transcript(self, text):
         for raw, clean in self.domain_words.items():
@@ -73,7 +89,8 @@ class Knowledge:
 
     def allowed_entries(self, case: Case) -> list[Entry]:
         return [entry for entry in self.entries.values()
-                if "*" in entry.scopes or set(case.scope) & set(entry.scopes)]
+                if (not entry.source_rows or case.scene_row in entry.source_rows)
+                and ("*" in entry.scopes or set(case.scope) & set(entry.scopes))]
 
     def retrieve(
         self,

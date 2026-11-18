@@ -19,7 +19,7 @@ def label(run, key):
     return f"{entry['passed']} / {entry['count']}"
 
 
-def report(clean, degraded, api, hybrid=False):
+def report(clean, degraded, api, hybrid=False, catalog=None):
     rsi = api["rsi"]
     before = rsi["summary"]["holdout_before"]
     after = rsi["summary"]["holdout_after"]
@@ -36,11 +36,31 @@ def report(clean, degraded, api, hybrid=False):
         " [混合输入原始记录](证据/混合输入-原始记录.json) · [通话录音](证据/混合输入.wav)\n\n"
         if hybrid else ""
     )
+    catalog_evidence = ""
+    if catalog:
+        rows = catalog["rows"]
+        phone_pass = sum(row["passed"] and row["source_route"] == "phone" for row in rows)
+        jingmai_pass = sum(row["passed"] and row["source_route"] == "jingmai" for row in rows)
+        catalog_evidence = (
+            "## 原表规则全量验收\n\n"
+            f"本地原表加载并逐条执行 {catalog['verified']} / {len(rows)} 条。"
+            f"电话 {phone_pass} 条通过身份、整改说明、确认、关单和书面回写。"
+            f"京麦 {jingmai_pass} 条通过书面关单和回执核对。"
+            f"已通过的场景中严重输出违规为 {sum(row.get('severe_output', 0) for row in rows)} 条。"
+            "报告还核对回联工单领取、释放、回联未接转京麦及人工复核处理。"
+            "逐条验收从业务 API 运行，WebRTC 音频另见语音测试。"
+            " [原表覆盖记录](证据/原表68条-覆盖记录.json)\n\n"
+        )
+    model = rsi.get("judge_model")
+    judge_evidence = (
+        f"{model} 对封存集 FAQ 类别抽样，前后得到 {before['judge_checks']} 和 {after['judge_checks']}，供语义复核。"
+        if model else "本轮验收采用固定的规则判定，语义裁判模型未启用。"
+    )
     return f"""# 智语外呼自测报告
 
 ## 环境与口径
 
-在本机 Windows x64、Python 3.13 和 Chrome 上用一键启动脚本运行。语音服务为本地 CPU 推理，Qwen 通过本地 llama.cpp 服务执行语义抽检。浏览器用合成测试音频作为麦克风输入，经过与现场操作一致的 WebRTC、VAD、ASR、对话、TTS 和回写。语音结果的统计单位是有效响应轮次。该样本用于检查功能与端到端时延。
+在本机 Windows x64、Python 3.13 和 Chrome 上运行。语音服务为本地 CPU 推理。浏览器用合成测试音频作为麦克风输入，经过 WebRTC、VAD、ASR、对话、TTS 和回写。语音结果的统计单位是有效响应轮次。该样本用于检查功能与端到端时延。
 
 ## 语音与业务闭环
 
@@ -64,9 +84,9 @@ def report(clean, degraded, api, hybrid=False):
 
 两轮均检查身份、驳回原因、整改动作、可追溯追问、用户确认和结构化回执。正常传输的打断测试在整改播报期间插入商家追问，系统回答后再次说明未播完的整改内容，再等待确认。API 另验证了京麦路由、二次未接预约、身份不符和隐私诱导拦截。SQLite 并发测试验证同键同参数的重复回写返回同一回执，冲突参数会被拒绝。
 
-## 人工复测
+{catalog_evidence}## 人工复测
 
-在工作台选择 `POP-001`，点击 **人工输入（文字）** 即可收听开场。展开 **POP-001 测试示例**，逐句输入，每句按 Enter 或点击 **发送**。通话中可开启麦克风、说出下一句，再关闭麦克风用键盘继续，开场及每轮回复均会语音播报。结束后检查六个阶段、回执和质检记录。身份异常可另开一通，第一句输入“不是负责人，打错了”，核对 **身份不符** 和单据详情的披露情况。麦克风轮次用于统计播放时延。
+在工作台选择 `POP-001`，点击 **人工输入（文字）** 即可收听开场。展开 **人工测试参考回复**，逐句输入，每句按 Enter 或点击 **发送**。通话中可开启麦克风、说出下一句，再关闭麦克风用键盘继续，开场及每轮回复均会语音播报。结束后检查六个阶段、回执和质检记录。身份异常可另开一通，第一句输入“不是负责人，打错了”，核对 **身份不符** 和单据详情的披露情况。麦克风轮次用于统计播放时延。
 
 {hybrid_evidence}启用第三方模型后，可在身份确认及原因说明后问「授权书在哪里上传？补齐后就能通过吗？」。在页面检查所用知识来源，在原始日志中检查 `answer_assist` 事件。连接与提示词配置见源码包的 README。上表的语音时延数据使用离线验收配置，现场接入云模型时需按实际配置复测。
 
@@ -78,9 +98,7 @@ def report(clean, degraded, api, hybrid=False):
 | 回归 | {label(rsi, 'regression_before')} | {label(rsi, 'regression_after')} |
 | 封存 | {label(rsi, 'holdout_before')} | {label(rsi, 'holdout_after')} |
 
-固定规则版本为 `{rsi['criteria']}`，随机种子为 `{rsi['seed']}`。活跃候选为 `{rsi['id']}`，随后通过接口回滚至基线。封存集迭代前后使用同一用例哈希 `{before['dataset_sha256']}`。本轮自动挖掘的补丁为 `{json.dumps(rsi['patch'], ensure_ascii=False)}`。回归退化 {len(rsi['regressions'])} 条。Qwen 对封存集各 FAQ 类别抽样，前后分别给出 {before['judge_checks']} 和 {after['judge_checks']}，供语义复核。硬门禁由可复现的规则判定。
-
-人工复核发现，小模型在“授权材料补在哪”上把迭代前的澄清回复误判为正确，把迭代后给出具体上传位置的回复误判为错误。保留原始裁判输出，正式评分使用规则项并对语义分歧进行人工检查。
+固定规则版本为 `{rsi['criteria']}`，随机种子为 `{rsi['seed']}`。活跃候选为 `{rsi['id']}`，随后通过接口回滚至基线。封存集迭代前后使用同一用例哈希 `{before['dataset_sha256']}`。本轮自动挖掘的补丁为 `{json.dumps(rsi['patch'], ensure_ascii=False)}`。回归退化 {len(rsi['regressions'])} 条。{judge_evidence}
 
 ## 原始记录与核验范围
 
@@ -88,11 +106,11 @@ def report(clean, degraded, api, hybrid=False):
 - [弱网加噪质检及时延](证据/弱网加噪-语音指标.json) · [完整事件](证据/弱网加噪-原始记录.json) · [通话录音](证据/弱网加噪.wav)
 - [RSI 逐用例日志](证据/RSI-原始记录.json) · [业务接口验收与回滚](证据/业务接口验收.json)
 
-测量使用浏览器音频能量阈值本地估算播放时延。合成信号经浏览器媒体轨道传输，耳麦和实际室内声学条件仍需赛场复测。官方 Mock、未公开评测和统一时延工具待赛方开放。Dockerfile 随源码提供，本机验收走 Windows 原生启动。
+测量使用浏览器音频能量阈值本地估算播放时延。合成信号经浏览器媒体轨道传输，耳麦和实际室内声学条件仍需赛场复测。当前没有独立统计 VAD 准确率、意图准确率或人工听评的自然度。官方 Mock、未公开评测和统一时延工具待赛方开放。Dockerfile 随源码提供，本机验收走 Windows 原生启动。
 """
 
 
-def package(normal, weak, backend, output, hybrid=None):
+def package(normal, weak, backend, output, hybrid=None, catalog=None):
     evidence = output / "证据"
     evidence.mkdir(parents=True, exist_ok=True)
     for origin, label_text in [(normal, "正常链路"), (weak, "弱网加噪")]:
@@ -103,13 +121,18 @@ def package(normal, weak, backend, output, hybrid=None):
     if hybrid:
         shutil.copyfile(hybrid / "voice-trace.json", evidence / "混合输入-原始记录.json")
         shutil.copyfile(hybrid / "voice.wav", evidence / "混合输入.wav")
+    catalog_report = read(catalog, "catalog-coverage.json") if catalog else None
+    if catalog_report:
+        if catalog_report["verified"] != 68 or catalog_report["failures"]:
+            raise ValueError("原表全量验收未通过，请先检查逐条覆盖报告。")
+        shutil.copyfile(catalog / "catalog-coverage.json", evidence / "原表68条-覆盖记录.json")
     shutil.copyfile(backend / "rsi-trace.json", evidence / "RSI-原始记录.json")
     shutil.copyfile(backend / "api-summary.json", evidence / "业务接口验收.json")
     shutil.copyfile(normal / "demo.mp4", output / "演示视频.mp4")
     for name in ("技术方案书.md", "开源组件与模型清单.md"):
         shutil.copyfile(ROOT / "docs" / name, output / name)
     text = report(read(normal, "speech-evidence.json"), read(weak, "speech-evidence.json"),
-                  read(backend, "api-summary.json"), hybrid=bool(hybrid))
+                  read(backend, "api-summary.json"), hybrid=bool(hybrid), catalog=catalog_report)
     (output / "自测报告.md").write_text(text, encoding="utf-8")
     sources = [ROOT / name for name in SOURCE_TOP]
     for folder in ("zhiyu", "data", "web", "scripts", "tests", "docs"):
@@ -127,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--weak", type=Path, default=Path("runtime/release-shaped"))
     parser.add_argument("--backend", type=Path, default=Path("runtime/api-evidence"))
     parser.add_argument("--hybrid", type=Path)
+    parser.add_argument("--catalog", type=Path, help="包含原表 68 条覆盖记录的验收目录")
     parser.add_argument("--output", type=Path, default=Path("提交材料"))
     args = parser.parse_args()
-    package(args.normal, args.weak, args.backend, args.output, args.hybrid)
+    package(args.normal, args.weak, args.backend, args.output, args.hybrid, args.catalog)

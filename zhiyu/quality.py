@@ -28,6 +28,8 @@ def inspect(record):
     return {
         "session_id": record["id"], "case_id": record["case_id"], "revision": record["revision"],
         "mode": record["mode"], "receipt": record["receipt"], "ticket": record["ticket_id"],
+        "followup_ticket": record.get("followup_ticket"), "written": record.get("written"),
+        "handoff_status": record.get("handoff_status"),
         "result": result, "stages": scopes, "complete": bool(
             result and result["disposition"] == "notified" and len(scopes) == len(STAGES)),
         "turns": len(of("user")), "facts_with_source": sum(x["fact"] and bool(x["source"]) for x in messages),

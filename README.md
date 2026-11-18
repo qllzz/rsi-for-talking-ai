@@ -1,6 +1,6 @@
 # 智语外呼
 
-第二届北京市大学生“人工智能+”创新大赛赛题 2。系统在浏览器与本机服务之间建立 WebRTC 音频链路，使用模拟京东 POP 商家资审单据完成电话通知、京麦路由、回写、质检和知识迭代。
+第二届北京市大学生“人工智能+”创新大赛赛题 2。作品提供京东 POP 资审驳回服务的完整参赛沙箱。涵盖原表全部 68 条规则、浏览器双向语音、京麦书面处理、联系工单、质检和知识迭代。
 
 ![商家服务工作台](docs/images/workbench.png)
 
@@ -9,6 +9,8 @@
 ## 启动
 
 需要 Python 3.13 x64，以及支持 WebRTC 的 Chrome 或 Edge。建议使用耳麦。
+
+启动时服务器从项目上一级目录或项目内 `reference/` 读取赛事提供的 `[POP资审]资审关单场景话术V1.0.xlsx`。原表在其他位置时，可通过环境变量 `ZHIYU_RULES_FILE` 指定完整路径。服务校验「场景汇总」第 13–80 行及其实际合并单元格内容。加载完整目录后，工作台显示 **68 条原表规则，54 条电话和 14 条京麦**。缺少原表时，工作台会显示目录未加载并进入内置用例模式。源文件和运行日志留在本地。
 
 Windows 双击 `启动智语外呼.cmd`，或在项目根目录运行以下命令。首次启动会下载依赖和离线语音模型。已准备好的环境可加 `--no-fetch`。默认监听本机回环地址。
 
@@ -21,6 +23,10 @@ python -X utf8 scripts/launch.py
 在左侧任务列表选择 `POP-001`，核对右侧单据信息后点击 **开始语音外呼**。依次说“我是商家负责人”“可以，请说明原因”“授权书在哪里上传”“我明白了，会补齐材料”。可在整改播报中直接开口追问。若整改说明被打断，系统重新说明后请再次确认。成功后可查看回执、质检、来源和原始事件。勾选“保存本次通话录音”才会保存双声道 WAV。工作台仅使用模拟单据。
 
 工作台按“任务列表—通话记录—单据信息”排列。任务支持按单据、商家或事项搜索，并按电话、京麦筛选；通话期间锁定当前单据。**通话记录** 中可按商家、单据、会话编号和处理结果筛选，在详情中核对回执、转写与音频指标并下载日志。窄屏使用单据下拉选择器，保留全部操作。
+
+在 **原表规则** 中按一级分类查找品牌、入驻、行业资质、公司资质和商品资质任务，查看原表行号、话术定位、默认和实际渠道。**流程用例** 补充商家申请回电、重复错误转京麦和信息不全转人工的场景，独立于 68 条规则。
+
+电话正常结束时，系统登记 `RC-` 处理回执和 `JM-` 京麦书面回执。直接走京麦的任务也生成可追溯的书面回执。第二次提交的首次未接生成 `WK-` 回联工单，从单据详情领取后继续联系。回联仍未接时登记京麦书面处理。人工复核工单在完成复核后可由操作员标记已处理。实际通话使用本地 WebRTC，业务回写和京麦通知由本地沙箱持久化。
 
 在 **知识评测** 中点击“运行一轮 RSI”。页面展示开发、回归与封存集结果，展开记录可查看补丁和下载评测日志，并支持回滚。想重复观测首轮改进时回滚至基线，再运行一轮。
 
@@ -45,6 +51,7 @@ python -X utf8 scripts/launch.py
 uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 .venv/Scripts/python.exe -m pytest -q
 .venv/Scripts/python.exe -m scripts.import_reference --source ..
+.venv/Scripts/python.exe -m scripts.verify_catalog --url http://127.0.0.1:8765
 .venv/Scripts/python.exe -m scripts.verify_voice --interrupt --output runtime/recheck
 .venv/Scripts/python.exe -m scripts.verify_voice --hybrid --output runtime/hybrid-check
 ```
@@ -55,7 +62,7 @@ uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 
 ```powershell
 .venv/Scripts/python.exe -m scripts.media_test_server
-.venv/Scripts/python.exe -m scripts.verify_voice --url http://127.0.0.1:8766 --interrupt --weak-network --noise-db 12 --output runtime/release-shaped
+.venv/Scripts/python.exe -m scripts.verify_voice --url http://127.0.0.1:8766 --hybrid --weak-network --noise-db 12 --output runtime/release-shaped
 ```
 
 ## 第三方 AI 辅助问答
@@ -92,7 +99,9 @@ Linux 可使用 `docker build -t zhiyu-outbound .` 和下面的命令。在同�
 docker run --rm --network host -v zhiyu-evidence:/opt/zhiyu/runtime zhiyu-outbound python -m uvicorn zhiyu.app:api --host 127.0.0.1 --port 8765
 ```
 
-`/docs` 列出本地 HTTP 接口，`/api/contracts/writeback` 输出回写 JSON Schema。业务接口目前由 `zhiyu.storage.MockTools` 提供本地实现。获得京东沙箱后，可在该边界接入名单、单据、工单和回写接口，并复用身份门禁和幂等键。
+`/docs` 列出本地 HTTP 接口，`/api/contracts/writeback` 输出回写 JSON Schema。`/api/work-items` 提供待办工单和京麦书面回执。业务接口由 `zhiyu.storage.MockTools` 提供本地实现。官方授权的名单、详情、京麦和回写接口可在这一层接入。
+
+容器内读取原表时，把赛事原表目录以只读方式挂载至 `/opt/zhiyu/reference`，或挂载到其他目录后设置 `ZHIYU_RULES_FILE`。首次运行完整验收需要提交方提供原表。
 
 本地 FAQ 匹配与 RSI 语义抽检沿用 `ZHIYU_LLM_URL`、`ZHIYU_LLM_MODEL` 和 `ZHIYU_LLM_TOKEN`，期望 OpenAI 兼容的 Chat Completions 与 JSON Schema 输出。比赛环境优先使用本机模型。服务端运行数据保存在 `runtime/`，可用 `ZHIYU_RUNTIME` 另设目录。
 

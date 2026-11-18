@@ -265,7 +265,9 @@ class VoiceCall:
         self.playback.stop()
         await self.pc.close()
         async with self.lock:
-            if self.dialog.state not in {"done", "idle"}:
+            if self.dialog.state == "idle":
+                await asyncio.to_thread(self.dialog.abandon)
+            elif self.dialog.state != "done":
                 with suppress(ValueError, OSError):
                     await asyncio.to_thread(self.dialog.terminal, "disconnect")
         pending = [task for task in self.tasks if task is not asyncio.current_task()]

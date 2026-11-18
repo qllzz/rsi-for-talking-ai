@@ -18,7 +18,7 @@ from zhiyu.audio import SpeechModels, pcm
 from zhiyu.knowledge import compact
 
 LINES = [
-    "是的，我是这家店的负责人，请讲。",
+    "是的，我是这家店的负责人，你说吧。",
     "可以，请给我说明驳回的原因。",
     "请问授权书要在哪里上传？",
     "好的，我明白了。",

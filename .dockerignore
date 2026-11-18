@@ -1,6 +1,7 @@
 .venv
 .cache
 runtime
+reference
 models
 __pycache__
 .pytest_cache

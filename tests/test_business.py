@@ -77,6 +77,13 @@ def test_interrupted_opening_repeats_identity_statement(build):
     assert call.handle("我是负责人")["intent"] == "verify"
 
 
+def test_identity_accepts_courteous_confirmation_without_trusting_unrelated_roles(build):
+    call, _, _ = build()
+    assert call.handle("我们是做代运营的")["intent"] == "verify_again"
+    assert not call.verified
+    assert call.handle("是的，我是这家店的负责人，请讲。")["intent"] == "verify"
+
+
 def test_rsi_evidence_and_rollback(tmp_path):
     evolution = Evolution(tmp_path)
     run = evolution.run()

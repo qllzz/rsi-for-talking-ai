@@ -30,27 +30,37 @@
     <div class="rail-bottom"><span class="dot"></span><span>本地服务<small>数据保存在当前设备</small></span></div>
   </aside>
   <main id="main-content">
-    <header class="top"><div class="breadcrumb">商家服务<span>/</span><strong id="page-name">外呼工作台</strong></div><div class="top-right"><span class="environment">演示环境</span><span id="readiness" class="service-status pending" role="status">检查语音服务</span></div></header>
+    <header class="top"><div class="breadcrumb">商家服务<span>/</span><strong id="page-name">外呼工作台</strong></div><div class="top-right"><span class="environment">本地业务沙箱</span><span id="readiness" class="service-status pending" role="status">检查语音服务</span></div></header>
     <section id="work" class="page">
       <div class="heading"><div><h1>外呼工作台</h1><p id="scene">京东 POP 商家资质审核驳回外呼</p></div><div class="heading-note">任务选择 → 通话沟通 → 结果登记</div></div>
       <div class="work-grid">
         <section class="panel task-panel" aria-labelledby="task-heading">
-          <div class="panel-heading"><h2 id="task-heading">任务列表</h2><span id="task-count" class="count">0</span></div>
+          <div class="panel-heading"><h2 id="task-heading">资审任务</h2><span id="task-count" class="count" aria-live="polite">0 条</span></div>
+          <p class="catalog-warning" id="catalog-warning" role="status" hidden></p>
           <div class="task-tools">
-            <label class="search-field"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="task-search" type="search" placeholder="搜索单据或商家" aria-label="搜索任务"></label>
-            <div class="task-filters" role="group" aria-label="处理渠道"><button class="selected" data-route="all" aria-pressed="true">全部</button><button data-route="phone" aria-pressed="false">电话</button><button data-route="jingmai" aria-pressed="false">京麦</button></div>
+            <label class="search-field"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="task-search" type="search" placeholder="单据、商家、审核事项" aria-label="搜索任务" disabled></label>
+            <div class="catalog-filters">
+              <select id="task-scope" aria-label="任务来源" disabled><option value="reference">原表规则</option></select>
+              <select id="task-category" aria-label="审核分类" disabled><option value="">全部分类</option></select>
+            </div>
+            <div class="task-filters" role="group" aria-label="处理渠道">
+              <button class="selected" data-route="all" aria-pressed="true" disabled>全部</button>
+              <button data-route="phone" aria-pressed="false" disabled>电话</button>
+              <button data-route="jingmai" aria-pressed="false" disabled>京麦</button>
+            </div>
             <div class="task-select"><label for="case">选择单据</label><select id="case" disabled><option>正在加载任务</option></select></div>
           </div>
           <div id="task-list" class="task-list" aria-label="可处理任务"><p class="list-empty">正在加载任务…</p></div>
-          <div class="panel-foot">当前列表使用演示单据</div>
+          <div class="panel-foot" id="catalog-summary">正在读取场景规则</div>
         </section>
         <section class="panel transcript-card" aria-labelledby="dialog-title">
           <div class="panel-heading transcript-heading"><div><h2 id="dialog-title">通话记录</h2><p id="dialog-hint">选择任务并发起通话，查看实时沟通记录。</p></div><span id="mode" class="chip neutral">未连接</span></div>
-          <div class="flow" aria-label="任务流程"><span data-stage="opening"><i>1</i>开场</span><span data-stage="identity"><i>2</i>核验</span><span data-stage="needs"><i>3</i>需求</span><span data-stage="offer"><i>4</i>沟通</span><span data-stage="confirm"><i>5</i>确认</span><span data-stage="writeback"><i>6</i>回写</span></div>
-          <div class="audio-strip" aria-label="实时音频状态"><span class="audio-status"><i id="live-dot"></i><b id="call-status">等待发起</b></span><canvas id="wave" width="440" height="100" aria-hidden="true"></canvas><time id="clock">00:00</time></div>
-          <div id="messages" class="messages" role="log" aria-live="polite" aria-label="实时通话记录"><div class="empty" id="call-empty"><svg class="empty-icon icon" aria-hidden="true"><use href="#icon-message"/></svg><p>尚未发起通话</p><small>核对单据信息后，选择语音或文字开始</small></div></div>
+          <div id="call-flow" class="flow" aria-label="外呼流程"><span data-stage="opening"><i>1</i>开场</span><span data-stage="identity"><i>2</i>核验</span><span data-stage="needs"><i>3</i>需求</span><span data-stage="offer"><i>4</i>沟通</span><span data-stage="confirm"><i>5</i>确认</span><span data-stage="writeback"><i>6</i>回写</span></div>
+          <div id="jingmai-flow" class="flow" aria-label="京麦流程" hidden><span><i>1</i>确认渠道</span><span data-stage="writeback"><i>2</i>登记回写</span></div>
+          <div class="audio-strip" aria-label="任务状态"><span class="audio-status"><i id="live-dot"></i><b id="call-status">等待发起</b></span><canvas id="wave" width="440" height="100" aria-hidden="true"></canvas><time id="clock">00:00</time></div>
+          <div id="messages" class="messages" role="log" aria-live="polite" aria-label="实时处理记录"><div class="empty" id="call-empty"><svg class="empty-icon icon" aria-hidden="true"><use href="#icon-message"/></svg><p id="empty-title">尚未发起通话</p><small id="empty-hint">核对单据信息后，选择语音或文字开始</small></div></div>
           <div id="partial" class="partial" role="status" hidden></div>
-          <div class="session-footer"><div><span>播放响应 P50 <b id="live-latency">—</b></span><span>打断 <b id="live-interrupt">0 次</b></span></div><button id="microphone" class="secondary compact" hidden>开启麦克风</button></div>
+          <div id="voice-footer" class="session-footer"><div><span>播放响应 P50 <b id="live-latency">—</b></span><span>打断 <b id="live-interrupt">0 次</b></span></div><button id="microphone" class="secondary compact" hidden>开启麦克风</button></div>
           <form id="text-form" class="text-form" hidden><label class="sr-only" for="message-input">商家回复</label><div class="input-row"><input id="message-input" maxlength="400" placeholder="输入商家回复，Enter 发送" aria-label="商家回复" required autocomplete="off"><button id="text-send" type="submit" class="primary">发送</button></div><p>文字与语音可交替输入，助手回复均会语音播报。</p></form>
           <div id="composer-idle" class="composer-idle">通话接通后，可在此输入商家回复</div>
           <p id="work-error" class="error" role="alert" hidden></p>
@@ -58,12 +68,34 @@
         <aside class="panel dossier-panel" aria-label="当前单据与通话操作">
           <div class="panel-heading"><h2>单据信息</h2><span id="route" class="chip neutral">选择单据</span></div>
           <div class="dossier-content"><div class="merchant-heading"><span class="merchant-avatar" aria-hidden="true">商</span><div><h3 id="merchant-name">—</h3><span id="case-number" class="mono">—</span></div></div>
-            <dl class="record-fields"><div><dt>审核事项</dt><dd id="case-title">—</dd></div><div><dt>提交次数</dt><dd id="case-attempt">—</dd></div><div><dt>处理渠道</dt><dd id="case-channel">—</dd></div></dl>
+            <dl class="record-fields">
+              <div><dt>审核事项</dt><dd id="case-title">—</dd></div>
+              <div id="classification-field" class="wide-field" hidden><dt>审核分类</dt><dd id="case-classification"></dd></div>
+              <div><dt>提交次数</dt><dd id="case-attempt">—</dd></div>
+              <div><dt>处理渠道</dt><dd id="case-channel">—</dd></div>
+              <div id="source-field" class="wide-field" hidden><dt>规则来源</dt><dd id="case-source"></dd></div>
+              <div id="last-result-field" class="wide-field" hidden><dt>上次结果</dt><dd id="case-last-result"></dd></div>
+            </dl>
             <div class="business-note"><strong>处理说明</strong><p id="route-note">请先选择需要处理的单据。</p></div>
+            <section id="case-followups" class="followups" aria-labelledby="followup-heading" hidden>
+              <div class="card-heading"><h3 id="followup-heading">待处理工单</h3><button id="refresh-followups" class="row-link" type="button">刷新</button></div>
+              <p id="followup-feedback" class="subtle" role="status"></p>
+              <ul id="followup-list" class="followup-list"></ul>
+              <div id="callback-actions" class="callback-actions" hidden>
+                <label for="followup-ticket">回电工单</label><select id="followup-ticket"></select>
+                <button id="callback-voice" class="primary" type="button">开始回电</button>
+                <button id="callback-text" class="secondary" type="button">回电（文字输入）</button>
+              </div>
+            </section>
             <section id="receipt" class="receipt" hidden><div class="card-heading"><h3>处理结果</h3><span class="chip ok" id="outcome"></span></div><div id="receipt-body" class="mono"></div><button id="open-quality" class="link-button">查看本通质检 →</button></section>
             <details id="manual-example" class="manual-example" hidden><summary>人工测试参考回复</summary><ol><li>我是商家负责人。</li><li>可以，请说明驳回原因。</li><li>授权书在哪里上传？</li><li>我明白了，会补齐材料。</li></ol></details>
           </div>
-          <div class="call-panel"><label class="record"><input type="checkbox" id="record">保存本次通话录音</label><div id="init-actions" class="start-actions"><button id="start" class="primary" disabled>开始语音外呼</button><button id="text-start" class="secondary" disabled>人工输入（文字）</button></div><div id="live-actions" class="live-actions" hidden><button id="hangup" class="danger">结束通话</button><button id="no-answer" class="secondary">模拟未接通</button></div><p class="operation-note" id="operation-note">请允许浏览器播放音频，建议使用耳麦。</p></div>
+          <div class="call-panel">
+            <label class="record" id="record-option"><input type="checkbox" id="record">保存本次通话录音</label>
+            <div id="init-actions" class="start-actions"><button id="start" class="primary" disabled>开始语音外呼</button><button id="text-start" class="secondary" disabled>人工输入（文字）</button></div>
+            <div id="live-actions" class="live-actions" hidden><button id="hangup" class="danger">结束通话</button><button id="no-answer" class="secondary">登记未接通</button></div>
+            <p class="operation-note" id="operation-note">请允许浏览器播放音频，建议使用耳麦。</p>
+          </div>
         </aside>
       </div>
     </section>
