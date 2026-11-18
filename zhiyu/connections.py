@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -76,12 +78,30 @@ def load_connection(role):
     return ModelConnection.parse(json.loads(path.read_text(encoding="utf-8-sig"))) if path.is_file() else None
 
 
+def restrict_windows_profile(path):
+    system32 = Path(os.environ["SystemRoot"]) / "System32"
+    options = {"check": True, "capture_output": True, "creationflags": subprocess.CREATE_NO_WINDOW}
+    try:
+        user = subprocess.run([system32 / "whoami.exe", "/user", "/fo", "csv", "/nh"], **options)
+        sid = re.search(rb'"(S-1-[0-9-]+)"', user.stdout)
+        if not sid:
+            raise OSError("无法识别当前 Windows 用户")
+        icacls = system32 / "icacls.exe"
+        grant = f"*{sid[1].decode('ascii')}:F"
+        subprocess.run([icacls, path, "/grant:r", grant], **options)
+        subprocess.run([icacls, path, "/inheritance:r"], **options)
+    except subprocess.CalledProcessError as exc:
+        raise OSError("无法限制 Windows 密钥文件的访问权限") from exc
+
+
 def store_connection(role, connection):
     path = config_path(role)
     temp = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=".env.zhiyu-", delete=False) as file:
             temp = Path(file.name)
+            if os.name == "nt":
+                restrict_windows_profile(temp)
             json.dump({"url": connection.url, "model": connection.model, "token": connection.token,
                        "enabled": connection.enabled}, file, ensure_ascii=False, indent=2)
             file.write("\n")

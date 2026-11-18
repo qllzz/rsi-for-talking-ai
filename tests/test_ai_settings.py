@@ -1,5 +1,7 @@
 import json
+import os
 import stat
+import subprocess
 
 import httpx
 from fastapi.testclient import TestClient
@@ -76,7 +78,19 @@ def test_ai_profiles_keep_credentials_private_and_apply_to_new_work(monkeypatch,
         saved = client.put(route, json={**edit, "model": "second"})
         assert saved.is_success and saved.json()["has_token"] and "key-original" not in saved.text
         assert load_connection("outbound").model == "second"
-        assert stat.S_IMODE(filename.stat().st_mode) == 0o600
+        if os.name == "nt":
+            acl_check = (
+                "$ErrorActionPreference = 'Stop'; "
+                "$acl = [System.IO.File]::GetAccessControl($env:ZHIYU_AGENT_CONFIG); "
+                "$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User; "
+                "$rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]); "
+                "if (!$acl.AreAccessRulesProtected -or $rules.Count -ne 1 -or "
+                "$rules[0].IdentityReference -ne $sid -or $rules[0].AccessControlType -ne 'Allow' -or "
+                "$rules[0].FileSystemRights -ne 'FullControl') { exit 1 }"
+            )
+            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", acl_check], check=True)
+        else:
+            assert stat.S_IMODE(filename.stat().st_mode) == 0o600
         assert client.put(route, json=edit).status_code == 409
 
         after = client.post("/api/text", json={"case_id": "POP-001"}).json()["session_id"]
