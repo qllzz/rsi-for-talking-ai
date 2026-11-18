@@ -214,14 +214,14 @@ class VoiceCall:
                 return False
             mode = "text" if revision is None else "voice"
             start = time.monotonic()
+            self.send("utterance", text=self.dialog.knowledge.transcript(redact(text))[:400],
+                      turn=self.dialog.index + 1, input_mode=mode)
             response = await asyncio.to_thread(self.dialog.handle, text, input_mode=mode)
             elapsed = time.monotonic() - start
             self.dialog.store.log(
                 self.dialog.id, "timing", turn=response["turn"], input_mode=mode,
                 endpoint_ms=round((start - end) * 1000, 1) if end is not None else None,
                 policy_ms=round(elapsed * 1000, 1), first_partial=first is not None)
-            self.send("utterance", text=self.dialog.knowledge.transcript(redact(text))[:400], turn=response["turn"],
-                      input_mode=mode)
             self.say(response, end)
             return True
 

@@ -6,23 +6,30 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from .agent import DialogueAgent
 from .answer import AnswerAssistant
 from .audio import SpeechModels, missing_models
 from .catalog import find_source, load_catalog
+from .connections import load_connection
 from .dialog import Dialogue, voice_templates
 from .evaluation import Evolution
 from .knowledge import ROOT, REVISION, SCENE_PATH
 from .llm import LanguageModel
 from .quality import inspect, percentile
 from .rtc import VoiceCall
+from .settings import router as settings_router
 from .storage import CallResult, MockTools, Store
+from .training import SCOPES, STAGES as SCRIPT_STAGES, MaterialConflict, MaterialInput, MaterialUpdate, material_catalog, quick_scripts
 
 RUNTIME = Path(os.environ.get("ZHIYU_RUNTIME", ROOT / "runtime")).resolve()
 WEB = ROOT / "web"
@@ -70,7 +77,11 @@ async def lifetime(service):
     catalog = await asyncio.to_thread(configured_catalog)
     service.state.store = Store(RUNTIME / "calls.db")
     service.state.model = LanguageModel()
-    service.state.evolution = Evolution(RUNTIME / "evolution", service.state.model, catalog=catalog)
+    judge_connection = load_connection("judge")
+    judge = LanguageModel(connection=judge_connection) if judge_connection else service.state.model
+    service.state.evolution = Evolution(RUNTIME / "evolution", judge, catalog=catalog)
+    service.state.ai_settings_lock = asyncio.Lock()
+    service.state.ai_versions = {role: uuid4().hex for role in ("outbound", "judge")}
     service.state.catalog = {
         "ready": catalog is not None,
         "total": len(catalog or ()),
@@ -87,6 +98,7 @@ async def lifetime(service):
         await asyncio.to_thread(service.state.speech.warm)
         await asyncio.to_thread(service.state.speech.prewarm, voice_templates(service.state.evolution.get()))
     service.state.answer = AnswerAssistant(asyncio.get_running_loop())
+    service.state.agent = DialogueAgent()
     gc = asyncio.create_task(reap(service))
     try:
         yield
@@ -95,12 +107,27 @@ async def lifetime(service):
         with suppress(asyncio.CancelledError):
             await gc
         await asyncio.gather(*(call.close() for call in service.state.voice.values()), return_exceptions=True)
+        old_agents = {session.dialog.agent for session in service.state.text.values()}
+        old_agents.update(call.dialog.agent for call in service.state.voice.values())
+        for agent in old_agents - {None, service.state.agent}:
+            agent.close()
+        service.state.agent.close()
         await service.state.answer.close()
+        if service.state.evolution.model is not service.state.model:
+            service.state.evolution.model.close()
         service.state.model.close()
 
 
 api = FastAPI(title="智语外呼 · 资审服务工作台", version="1.1", lifespan=lifetime)
 api.mount("/assets", StaticFiles(directory=WEB), name="assets")
+api.include_router(settings_router)
+
+
+@api.exception_handler(RequestValidationError)
+async def safe_validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/api/ai-settings/"):
+        return JSONResponse(status_code=422, content={"detail": "配置格式有误，请检查地址、模型和密钥字段"})
+    return await request_validation_exception_handler(request, exc)
 
 
 class Payload(BaseModel):
@@ -154,9 +181,11 @@ def new_dialog(case_id, mode, followup_ticket=None):
     if mode == "voice" and knowledge.cases[case_id].channel() != "phone" and not followup_ticket:
         raise HTTPException(409, "该单据应通过京麦书面处理。")
     try:
+        agent = services.agent if services.agent.enabled else None
         return Dialogue(knowledge, MockTools(services.store, knowledge), services.store,
-                        case_id, mode, services.model.resolve if services.model.enabled else None,
-                        answer_assistant=services.answer if services.answer.enabled else None,
+                        case_id, mode, services.model.resolve if services.model.enabled and not agent else None,
+                        answer_assistant=services.answer if services.answer.enabled and not agent else None,
+                        agent=agent,
                         followup_ticket=followup_ticket)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
@@ -191,10 +220,14 @@ async def index():
 @api.get("/api/status")
 def status():
     knowledge = state().evolution.get()
-    return {"voice": state().speech is not None, "missing": missing_models(), "llm": state().model.enabled,
+    judge = state().evolution.model
+    agent = state().agent
+    return {"voice": state().speech is not None, "missing": missing_models(), "llm": judge.enabled,
             "tts_engine": state().speech.tts_engine if state().speech else None,
-            "model": state().model.model if state().model.enabled else None,
+            "model": judge.model if judge.enabled else None,
             "answer_model": state().answer.model if state().answer.enabled else None,
+            "dialogue_model": agent.model if agent.enabled else None,
+            "dialogue_policy": knowledge.dialogue["version"],
             "revision": knowledge.revision, "scene": knowledge.title, "scene_version": knowledge.version,
             "catalog": state().catalog}
 
@@ -351,6 +384,32 @@ def metrics():
 def rsi():
     evolution = state().evolution
     return {"active": evolution.pointer(), "history": evolution.history()}
+
+
+@api.get("/api/training")
+def training_workspace():
+    evolution = state().evolution
+    knowledge = evolution.get()
+    return {"active": knowledge.revision, "scopes": SCOPES, "stages": SCRIPT_STAGES,
+            "materials": material_catalog(knowledge, evolution.materials()), "scripts": quick_scripts(knowledge)}
+
+
+@api.post("/api/training/materials", status_code=201)
+def create_training_material(payload: MaterialInput):
+    try:
+        return state().evolution.save_material(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@api.put("/api/training/materials/{identifier}")
+def update_training_material(identifier: str, payload: MaterialUpdate):
+    try:
+        return state().evolution.save_material(payload.model_dump(exclude={"edit_version"}), identifier, payload.edit_version)
+    except KeyError:
+        raise HTTPException(404, "找不到可编辑的训练资料") from None
+    except MaterialConflict as exc:
+        raise HTTPException(409, str(exc)) from None
 
 
 @api.post("/api/rsi/run")

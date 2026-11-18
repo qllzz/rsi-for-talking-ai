@@ -13,6 +13,7 @@ from .dialog import Dialogue
 from .knowledge import Knowledge, REVISION, compact
 from .quality import inspect
 from .storage import MockTools, Store
+from .training import MaterialConflict, published_entry
 
 JUDGE_VERSION = "pop-criteria-v1"
 SEED = 20261116
@@ -162,6 +163,46 @@ def mine_aliases(failures):
     return result
 
 
+def check_training(knowledge, drafts):
+    scenarios, errors = [], []
+    for item in drafts:
+        identifier = item["id"]
+        case = next((case for case in knowledge.cases.values() if case.channel() == "phone"
+                     and case.reason and case.action and (item["scope"] == "*" or item["scope"] in case.scope)), None)
+        if not case:
+            errors.append({"id": identifier, "query": item["question"], "reason": "适用范围没有可测试的电话场景"})
+            continue
+        for query in dict.fromkeys([item["question"], *item["aliases"]]):
+            scenarios.append({"id": identifier, "case_id": case.id, "faq": identifier, "disposition": "notified",
+                              "turns": ["我是负责人", "可以，请说明驳回原因", query, "我明白了"]})
+    report = evaluate(knowledge, scenarios) if scenarios else {"count": 0, "passed": 0, "traces": []}
+    total = report["count"] + len(errors)
+    errors.extend({"id": trace["id"], "query": trace["query"], "reason": "问法未稳定命中本条资料或改变了处理流程"}
+                  for trace in report["traces"] if not trace["ok"])
+    return {"count": total, "passed": report["passed"], "issues": errors, "traces": report["traces"]}
+
+
+def check_reviewed_answers(current, candidate, baseline):
+    issues = {}
+    checked = set()
+    for case in current.cases.values():
+        if case.channel() != "phone":
+            continue
+        entries = [entry for entry in current.allowed_entries(case) if entry.id in baseline.entries]
+        key = (tuple(sorted(case.scope)), tuple(entry.id for entry in entries))
+        if key in checked:
+            continue
+        checked.add(key)
+        for entry in entries:
+            for query in dict.fromkeys([entry.question, *entry.aliases]):
+                if current.retrieve(query, case) != entry:
+                    continue
+                replacement = candidate.retrieve(query, case)
+                if not replacement or replacement.id != entry.id:
+                    issues[entry.id, query] = {"id": entry.id, "query": query, "reason": "已有审核问答的匹配结果被改变"}
+    return list(issues.values())
+
+
 class Evolution:
     def __init__(self, folder, model=None, *, catalog=None):
         self.folder = folder
@@ -182,13 +223,42 @@ class Evolution:
             return Knowledge.load(catalog=self.catalog)
         file = self.folder / f"{revision}.json"
         patch = json.loads(file.read_text(encoding="utf-8"))
-        return Knowledge.load(revision, patch["aliases"], catalog=self.catalog)
+        return Knowledge.load(revision, patch["aliases"], catalog=self.catalog, training=patch.get("training", []))
 
     def write(self, name, data):
         file = self.folder / name
         temp = file.with_suffix(".tmp")
         temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temp, file)
+
+    def materials(self):
+        path = self.folder / "materials.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+    def replace_judge(self, model):
+        with self.lock:
+            previous = self.model
+            self.model = model
+            return previous
+
+    def save_material(self, fields, identifier=None, edit_version=None):
+        with self.lock:
+            materials = self.materials()
+            if identifier is None:
+                if len(materials) >= 60:
+                    raise ValueError("训练资料最多保存 60 条")
+                record = {"id": "training_" + uuid4().hex, "edit_version": 1, **fields}
+                materials.append(record)
+            else:
+                index = next((index for index, item in enumerate(materials) if item["id"] == identifier), None)
+                if index is None:
+                    raise KeyError(identifier)
+                if materials[index]["edit_version"] != edit_version:
+                    raise MaterialConflict("资料已在其他页面更新，请刷新后重试")
+                record = {"id": identifier, "edit_version": edit_version + 1, **fields}
+                materials[index] = record
+            self.write("materials.json", materials)
+            return record
 
     def run(self, publish=True):
         with self.lock:
@@ -204,19 +274,24 @@ class Evolution:
                 aliases[entry] = list(dict.fromkeys([*aliases[entry], *values]))
             baseline = self.get("baseline")
             aliases = {key: [word for word in words if word not in baseline.entries[key].aliases]
-                       for key, words in aliases.items()}
+                       for key, words in aliases.items() if key in baseline.entries}
             revision = "r-" + uuid4().hex[:12]
-            candidate = Knowledge.load(revision, aliases, catalog=self.catalog)
+            selected = [item for item in self.materials() if item["enabled"]]
+            training = [published_entry(item) for item in selected]
+            training_changed = tuple(training) != current.training
+            candidate = Knowledge.load(revision, aliases, catalog=self.catalog, training=training)
             after_dev = evaluate(candidate, dev)
             after = evaluate(candidate, regression)
             regressions = [old["id"] for old, new in zip(before["traces"], after["traces"])
                            if old["ok"] and not new["ok"]]
-            approved = bool(new_aliases and after_dev["passed"] > before_dev["passed"]
-                            and not regressions and not after["failures"].get("compliance"))
+            checks = check_training(candidate, selected)
+            if training_changed:
+                checks["issues"].extend(check_reviewed_answers(current, candidate, baseline))
+            improved = new_aliases and after_dev["passed"] > before_dev["passed"]
+            approved = bool((improved or training_changed and after_dev["passed"] >= before_dev["passed"])
+                            and not regressions and not after["failures"].get("compliance") and not checks["issues"])
             if approved:
-                self.write(f"{revision}.json", {"aliases": aliases, "parent": current.revision})
-                if publish:
-                    self.write("active.json", {"revision": revision})
+                self.write(f"{revision}.json", {"aliases": aliases, "training": training, "parent": current.revision})
             # Holdout is measured after the version decision and is absent from patch generation and gating.
             holdout = generate("holdout", missing_case=missing_case)
             frozen_before = evaluate(current, holdout, self.model)
@@ -227,10 +302,14 @@ class Evolution:
                 "id": revision, "time": datetime.now(timezone.utc).isoformat(), "previous": current.revision,
                 "outcome": "accepted" if approved else "rejected", "activated": approved and publish,
                 "patch": new_aliases, "regressions": regressions, "criteria": JUDGE_VERSION, "seed": SEED,
+                "materials": {"selected": len(selected), "changed": training_changed,
+                              **{key: value for key, value in checks.items() if key != "traces"}},
                 "summary": {key: {k: v for k, v in run.items() if k != "traces"} for key, run in runs.items()},
                 "judge_model": self.model.model if self.model and self.model.enabled else None,
             }
-            self.write(f"run-{revision}.json", {**result, "runs": runs})
+            self.write(f"run-{revision}.json", {**result, "runs": runs, "material_checks": checks["traces"]})
+            if approved and publish:
+                self.write("active.json", {"revision": revision})
             return result
 
     def history(self):
@@ -239,6 +318,7 @@ class Evolution:
                            reverse=True)[:30]:
             data = json.loads(path.read_text(encoding="utf-8"))
             data.pop("runs", None)
+            data.pop("material_checks", None)
             results.append(data)
         return results
 

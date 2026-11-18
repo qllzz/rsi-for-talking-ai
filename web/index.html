@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="智语外呼商家服务工作台，处理资质审核通知、通话质检和知识评测。">
+  <meta name="description" content="智语外呼商家服务工作台，处理资质审核通知、通话质检和 AI 训练。">
   <title>智语外呼 · 商家服务工作台</title>
   <link rel="stylesheet" href="/assets/style.css">
   <script type="module" src="/assets/app.js"></script>
@@ -25,14 +25,14 @@
     <nav aria-label="主导航">
       <button data-page="work" class="selected" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#icon-phone"/></svg>外呼工作台</button>
       <button data-page="history"><svg class="icon" aria-hidden="true"><use href="#icon-list"/></svg>通话记录</button>
-      <button data-page="rsi"><svg class="icon" aria-hidden="true"><use href="#icon-chart"/></svg>知识评测</button>
+      <button data-page="rsi"><svg class="icon" aria-hidden="true"><use href="#icon-chart"/></svg>AI 训练</button>
     </nav>
     <div class="rail-bottom"><span class="dot"></span><span>本地服务<small>数据保存在当前设备</small></span></div>
   </aside>
   <main id="main-content">
-    <header class="top"><div class="breadcrumb">商家服务<span>/</span><strong id="page-name">外呼工作台</strong></div><div class="top-right"><span class="environment">本地业务沙箱</span><span id="readiness" class="service-status pending" role="status">检查语音服务</span></div></header>
+    <header class="top"><div class="breadcrumb">商家服务<span>/</span><strong id="page-name">外呼工作台</strong></div><div class="top-right"><span id="dialogue-mode" class="environment">本地业务沙箱</span><span id="readiness" class="service-status pending" role="status">检查语音服务</span></div></header>
     <section id="work" class="page">
-      <div class="heading"><div><h1>外呼工作台</h1><p id="scene">京东 POP 商家资质审核驳回外呼</p></div><div class="heading-note">任务选择 → 通话沟通 → 结果登记</div></div>
+      <div class="heading"><div><h1>外呼工作台</h1><p id="scene">京东 POP 商家资质审核驳回外呼</p></div><div class="ai-heading-actions"><span id="outbound-ai-model" class="subtle"></span><button class="secondary" type="button" data-ai-settings="outbound">AI 接口</button></div></div>
       <div class="work-grid">
         <section class="panel task-panel" aria-labelledby="task-heading">
           <div class="panel-heading"><h2 id="task-heading">资审任务</h2><span id="task-count" class="count" aria-live="polite">0 条</span></div>
@@ -61,7 +61,7 @@
           <div id="messages" class="messages" role="log" aria-live="polite" aria-label="实时处理记录"><div class="empty" id="call-empty"><svg class="empty-icon icon" aria-hidden="true"><use href="#icon-message"/></svg><p id="empty-title">尚未发起通话</p><small id="empty-hint">核对单据信息后，选择语音或文字开始</small></div></div>
           <div id="partial" class="partial" role="status" hidden></div>
           <div id="voice-footer" class="session-footer"><div><span>播放响应 P50 <b id="live-latency">—</b></span><span>打断 <b id="live-interrupt">0 次</b></span></div><button id="microphone" class="secondary compact" hidden>开启麦克风</button></div>
-          <form id="text-form" class="text-form" hidden><label class="sr-only" for="message-input">商家回复</label><div class="input-row"><input id="message-input" maxlength="400" placeholder="输入商家回复，Enter 发送" aria-label="商家回复" required autocomplete="off"><button id="text-send" type="submit" class="primary">发送</button></div><p>文字与语音可交替输入，助手回复均会语音播报。</p></form>
+          <form id="text-form" class="text-form" hidden><label class="sr-only" for="message-input">商家回复</label><div class="input-row"><input id="message-input" maxlength="400" placeholder="输入商家回复，Enter 发送" aria-label="商家回复" required autocomplete="off"><button id="text-send" type="submit" class="primary">发送</button></div><p id="input-hint">文字与语音可交替输入，助手回复均会语音播报。</p></form>
           <div id="composer-idle" class="composer-idle">通话接通后，可在此输入商家回复</div>
           <p id="work-error" class="error" role="alert" hidden></p>
         </section>
@@ -108,11 +108,85 @@
       </div>
     </section>
     <section id="rsi" class="page" hidden>
-      <div class="heading"><div><h1>知识评测</h1><p>验证知识调整效果，管理当前使用的知识版本。</p></div><button id="run-rsi" class="primary">运行一轮 RSI</button></div>
-      <section class="panel rsi-current"><div><span class="subtle">当前知识版本</span><strong id="revision" class="mono">—</strong><p>候选知识通过回归评测后启用，正在进行的通话继续使用原版本。</p></div><button id="rollback" class="secondary">回滚至基线</button></section>
+      <div class="heading training-heading">
+        <div><h1>AI 训练</h1><p>维护客服知识和常用话术，评估每次调整的效果。</p></div>
+        <div class="ai-heading-actions"><button class="secondary" type="button" data-ai-settings="judge">AI 接口</button><button id="run-rsi" class="primary" disabled>运行一轮 RSI</button></div>
+      </div>
       <p id="rsi-status" class="rsi-status" role="status" hidden></p>
-      <section class="panel rsi-panel"><div class="panel-heading"><h2>评测记录</h2><span class="subtle">开发集 · 回归集 · 封存集</span></div><div id="rsi-list"></div></section>
+      <section class="panel training-overview" aria-labelledby="rsi-heading">
+        <div class="panel-heading"><h2 id="rsi-heading">RSI 表现</h2><span id="rsi-latest" class="subtle">正在读取评测记录</span></div>
+        <div id="rsi-metrics" class="metrics training-metrics"></div>
+      </section>
+      <div class="training-libraries">
+        <section class="panel" aria-labelledby="knowledge-heading">
+          <div class="panel-heading"><h2 id="knowledge-heading">知识库（REA）</h2><button id="material-add" class="secondary compact" disabled>新增资料</button></div>
+          <div class="training-tools">
+            <label class="search-field"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="material-search" type="search" placeholder="搜索问题、来源或问法" aria-label="搜索训练资料"></label>
+            <select id="material-filter" aria-label="资料状态">
+              <option value="all">全部状态</option><option value="reviewed">已审核</option><option value="pending">待评测</option><option value="active">已启用</option><option value="paused">未纳入</option>
+            </select>
+          </div>
+          <p id="material-status" class="training-feedback subtle" role="status" hidden></p>
+          <ul id="material-list" class="training-list" aria-label="训练资料"></ul>
+          <div class="panel-foot training-foot"><span id="material-count">正在加载资料</span><span>改动通过评测后生效</span></div>
+        </section>
+        <section class="panel" aria-labelledby="script-heading">
+          <div class="panel-heading"><h2 id="script-heading">快速话术</h2><button id="script-favorites" class="secondary compact" type="button" aria-pressed="false">仅看收藏</button></div>
+          <div class="training-tools">
+            <label class="search-field"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="script-search" type="search" placeholder="搜索话术名称或内容" aria-label="搜索话术"></label>
+            <select id="script-filter" aria-label="话术环节"><option value="all">全部环节</option></select>
+          </div>
+          <p id="script-status" class="training-feedback subtle" role="status" hidden></p>
+          <ul id="script-list" class="training-list" aria-label="常用话术"></ul>
+          <div class="panel-foot training-foot"><span id="script-count">正在加载话术</span><span>展开后查看全文</span></div>
+        </section>
+      </div>
+      <section class="panel training-trend" aria-labelledby="rsi-trend-heading">
+        <div class="panel-heading"><h2 id="rsi-trend-heading">评测趋势</h2><select id="rsi-series" aria-label="趋势评测集"><option value="holdout">封存集</option><option value="regression">回归集</option><option value="dev">开发集</option></select></div>
+        <div id="rsi-trend" class="rsi-trend" aria-label="按轮次对比评测通过率"></div>
+      </section>
+      <section class="panel rsi-panel" aria-labelledby="rsi-history-heading">
+        <div class="panel-heading"><h2 id="rsi-history-heading">评测记录</h2><button id="rollback" class="secondary compact" disabled>回滚至基线</button></div>
+        <div id="rsi-list"></div>
+      </section>
+      <dialog id="material-dialog" class="material-dialog" aria-labelledby="material-title">
+        <form id="material-form">
+          <div class="panel-heading"><h2 id="material-title">新增训练资料</h2><button id="material-close" class="secondary compact" type="button">关闭</button></div>
+          <div class="material-fields">
+            <label>标准问题<input name="question" required maxlength="100"></label>
+            <label>核准答复<textarea name="answer" required maxlength="320" rows="4"></textarea></label>
+            <div class="material-columns"><label>依据或来源<input name="source" required maxlength="100"></label><label>适用范围<select name="scope" required></select></label></div>
+            <label>补充问法 <span class="subtle">选填，每行一种，最多 5 种</span><textarea name="aliases" rows="3" maxlength="510"></textarea></label>
+            <p id="material-origin" class="hint" hidden></p>
+            <label class="material-check"><input name="enabled" type="checkbox" checked> 纳入下一轮评测</label>
+            <p id="material-form-error" class="error" role="alert" hidden></p>
+          </div>
+          <div id="material-actions" class="panel-foot material-actions"><button id="material-save" class="primary" type="submit">保存资料</button></div>
+        </form>
+      </dialog>
     </section>
+    <dialog id="ai-settings-dialog" class="material-dialog" aria-labelledby="ai-settings-title">
+      <form id="ai-settings-form" method="post" autocomplete="off">
+        <div class="panel-heading"><h2 id="ai-settings-title">AI 接口设置</h2><button id="ai-settings-close" class="secondary compact" type="button">关闭</button></div>
+        <div class="ai-settings-switch" role="group" aria-label="接口用途">
+          <button class="secondary" type="button" data-ai-profile="outbound" aria-pressed="false">外呼对话</button>
+          <button class="secondary" type="button" data-ai-profile="judge" aria-pressed="false">RSI 语义裁判</button>
+        </div>
+        <div class="material-fields">
+          <p id="ai-settings-scope" class="hint"></p>
+          <div class="ai-settings-state"><label class="material-check"><input name="enabled" type="checkbox"> 启用此接口</label><span id="ai-settings-current" class="chip neutral"></span></div>
+          <label>API 基础地址<input name="url" type="url" placeholder="https://api.example.com/v1" maxlength="512" spellcheck="false"></label>
+          <label>模型名称<input name="model" placeholder="填写服务商提供的模型标识" maxlength="150" spellcheck="false"></label>
+          <label>API Key<input name="token" type="password" maxlength="4096" autocomplete="new-password" spellcheck="false"></label>
+          <label id="ai-settings-clear" class="material-check" hidden><input name="clear_token" type="checkbox"> 移除已保存的密钥</label>
+          <p id="ai-settings-feedback" class="hint" role="status" hidden></p>
+        </div>
+        <div class="panel-foot material-actions ai-settings-actions">
+          <button id="ai-settings-test" class="secondary" type="button" disabled>测试连接</button>
+          <button id="ai-settings-save" class="primary" type="submit" disabled>保存设置</button>
+        </div>
+      </form>
+    </dialog>
   </main>
   <audio id="remote" autoplay playsinline></audio>
 </body>

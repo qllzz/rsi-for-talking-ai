@@ -10,6 +10,7 @@ from zhiyu.answer import AnswerAssistant
 
 
 def configured_client(monkeypatch, tmp_path, handler, timeout="1.2"):
+    monkeypatch.setenv("ZHIYU_AGENT_URL", "")
     monkeypatch.setenv("ZHIYU_ANSWER_URL", "https://api.deepseek.com")
     monkeypatch.setenv("ZHIYU_ANSWER_MODEL", "deepseek-flash")
     monkeypatch.setenv("ZHIYU_ANSWER_TOKEN", "fixture-key")

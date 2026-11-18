@@ -1,16 +1,23 @@
+import {setupTraining} from "./training.js";
+import {setupAISettings} from "./ai-settings.js";
+
 const $ = (id) => document.getElementById(id);
 const statusText = {
   notified: "已通知", wrong_party: "身份不符", callback: "已登记回电", jingmai: "京麦处理",
   handoff: "转人工复核", ended: "已结束", write_pending: "等待回写"
 };
 const routeLabel = {phone: "电话外呼", jingmai: "京麦书面处理"};
+const browserVoiceHint = "语音通话请在 Chrome 或 Edge 中打开此页面，也可直接使用文字输入。";
 const routeButtons = [...document.querySelectorAll("[data-route]")];
 const live = {mode: null, id: null, pc: null, dc: null, sender: null, mic: null, context: null,
   inbound: null, outbound: null, start: 0, done: false, closing: false,
   speaking: false, playing: false, lastMic: null, end: null, waiting: null, latencies: [], interrupts: 0,
   lastStats: 0, selected: null, accepting: false, micBusy: false, drain: null, drainTimer: null, lastOutput: 0,
-  followupTicket: null, writePending: false};
-let ready = false;
+  followupTicket: null, writePending: false, textBusy: false};
+let browserVoice = typeof window.RTCPeerConnection === "function"
+  && typeof window.RTCPeerConnection.prototype?.addTransceiver === "function"
+  && typeof window.AudioContext === "function";
+let modelsReady = false;
 let taskList = [];
 let qualityId = null;
 let taskRoute = "all";
@@ -19,11 +26,25 @@ let historyRequest = 0;
 let workTickets = [];
 let workRequest = 0;
 
-async function request(url, body) {
+function voiceReady() {
+  return browserVoice && modelsReady;
+}
+
+function renderReadiness() {
+  $("readiness").textContent = !browserVoice ? "当前浏览器仅支持文字" : modelsReady ? "离线语音就绪" : "语音模型未就绪";
+  $("readiness").className = "service-status " + (voiceReady() ? "ok" : "pending");
+}
+
+function renderOutboundModel(model) {
+  $("dialogue-mode").textContent = model ? "云端 AI 对话" : "本地业务沙箱";
+  $("outbound-ai-model").textContent = model ? `当前模型 · ${model}` : "使用本地流程";
+}
+
+async function request(url, body, method = "POST") {
   let response;
   try {
     response = await fetch(url, body === undefined ? {} : {
-      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
+      method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)
     });
   } catch {
     throw new Error("无法连接本地服务，请确认程序正在运行后重试。");
@@ -31,7 +52,7 @@ async function request(url, body) {
   let data;
   try { data = await response.json(); }
   catch { throw new Error("服务暂时不可用，请稍后重试。"); }
-  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "请求未完成");
+  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : data.detail?.[0]?.msg?.replace(/^Value error, /, "") ?? "请求未完成");
   return data;
 }
 
@@ -48,9 +69,14 @@ function navigate(name, selectedHistory = null) {
     button.classList.toggle("selected", button.dataset.page === name);
     button.setAttribute("aria-current", button.dataset.page === name ? "page" : "false");
   }
-  $("page-name").textContent = {work: "外呼工作台", history: "通话记录", rsi: "知识评测"}[name];
+  $("page-name").textContent = {work: "外呼工作台", history: "通话记录", rsi: "AI 训练"}[name];
   if (name === "history") readHistory(selectedHistory).catch(showQualityError);
-  if (name === "rsi") readRsi().catch((e) => rsiStatus(e.message));
+  if (name === "rsi") {
+    window.history.replaceState(null, "", "#training");
+    training.load();
+  } else if (window.location.hash === "#training") {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
 }
 
 function openCallQuality(id) {
@@ -153,8 +179,8 @@ function renderRoute() {
   const locked = Boolean(live.mode || live.closing);
   $("route").textContent = live.mode && live.followupTicket ? "电话回电" : routeLabel[task?.route] ?? "选择单据";
   $("start").textContent = jingmai ? "登记京麦结果" : "开始语音外呼";
-  $("start").disabled = locked || !task || (phone && !ready);
-  $("text-start").disabled = locked || !phone || !ready;
+  $("start").disabled = locked || !task || (phone && !voiceReady());
+  $("text-start").disabled = locked || !phone;
   $("text-start").hidden = jingmai;
   $("case").value = live.selected ?? "";
   $("case").disabled = locked || !task;
@@ -168,8 +194,8 @@ function renderRoute() {
     row.setAttribute("aria-pressed", String(selected));
     row.disabled = locked;
   }
-  $("record").disabled = locked || !phone;
-  $("record-option").hidden = jingmai;
+  $("record").disabled = locked || !phone || !voiceReady();
+  $("record-option").hidden = jingmai || !voiceReady();
   $("init-actions").hidden = Boolean(live.mode);
   $("merchant-name").textContent = task?.merchant ?? "—";
   $("case-number").textContent = task?.id ?? "—";
@@ -195,12 +221,14 @@ function renderRoute() {
   if (jingmai) $("route-note").textContent = "此单据通过京麦书面处理。登记结果后，可在通话记录中核对回执。";
   $("operation-note").textContent = live.mode
     ? "处理进行中，结束后可切换单据。"
-    : phone ? "语音通话建议使用耳麦。" : jingmai ? "通过京麦书面通知商家。" : "";
+    : phone ? (!browserVoice ? browserVoiceHint : modelsReady ? "语音通话建议使用耳麦。" : "语音模型未就绪，可使用文字输入。")
+    : jingmai ? "通过京麦书面通知商家。" : "";
   const writtenOnly = jingmai && !live.followupTicket;
   $("call-flow").hidden = writtenOnly;
   $("jingmai-flow").hidden = !writtenOnly;
-  $("voice-footer").hidden = writtenOnly;
-  $("wave").hidden = writtenOnly;
+  const showAudio = !writtenOnly && voiceReady() && live.mode !== "text";
+  $("voice-footer").hidden = !showAudio;
+  $("wave").hidden = !showAudio;
   $("clock").hidden = writtenOnly;
   renderFollowups();
 }
@@ -239,8 +267,8 @@ function renderFollowups() {
   if (callbacks.some((item) => item.id === previous)) select.value = previous;
   $("callback-actions").hidden = !callbacks.length;
   select.disabled = locked;
-  $("callback-voice").disabled = locked || !ready;
-  $("callback-text").disabled = locked || !ready;
+  $("callback-voice").disabled = locked || !voiceReady();
+  $("callback-text").disabled = locked;
 }
 
 async function resolveHandoff(ticket, button) {
@@ -264,14 +292,21 @@ async function readWorkItems() {
 }
 
 function renderInputControls() {
-  const active = live.mode === "voice" && live.accepting && !live.done;
-  $("microphone").hidden = !active;
+  const voice = live.mode === "voice";
+  const active = (voice || live.mode === "text") && live.accepting && !live.done;
+  $("microphone").hidden = !active || !voice;
   $("microphone").disabled = live.micBusy;
   $("microphone").textContent = live.mic ? "关闭麦克风" : "开启麦克风";
   $("composer-idle").hidden = active;
+  $("text-form").hidden = !active;
+  $("manual-example").hidden = !active || live.selected !== "POP-001";
   if (!active) return;
-  $("text-form").hidden = false;
-  $("manual-example").hidden = live.selected !== "POP-001";
+  $("input-hint").hidden = !voice;
+  if (!voice) {
+    $("mode").textContent = "文字会话";
+    $("dialog-hint").textContent = "输入商家回复，按 Enter 或点击发送。";
+    return;
+  }
   $("mode").textContent = live.mic ? "语音与文字" : "文字输入 · 语音播报";
   $("dialog-hint").textContent = live.mic
     ? "可用麦克风或输入文字，助手均会播报回复。"
@@ -283,12 +318,12 @@ function error(message = "") {
   $("work-error").hidden = !message;
 }
 
-function bubble(role, text, source, answerModel, timestamp) {
+function bubble(role, text, source, answerModel, timestamp, assistantName = "语音助手", agent = false) {
   const user = role === "user";
   const outer = element("div", "msg " + role);
   const description = element("div");
-  const head = element("div", "msg-head", user ? "商家" : "语音助手");
-  if (answerModel) head.append(element("span", "chip neutral", "模型辅助"));
+  const head = element("div", "msg-head", user ? "商家" : assistantName);
+  if (answerModel) head.append(element("span", "chip neutral", agent ? "AI 回复" : "模型辅助"));
   if (timestamp) head.append(element("time", "", timestamp));
   description.append(head, element("div", "msg-body", text));
   if (source) description.append(element("small", "msg-source", source));
@@ -296,9 +331,10 @@ function bubble(role, text, source, answerModel, timestamp) {
   return outer;
 }
 
-function append(role, text, source, answerModel) {
+function append(role, text, source, answerModel, agent) {
   $("call-empty").hidden = true;
-  $("messages").append(bubble(role, text, source, answerModel, $("clock").textContent));
+  const assistantName = live.mode === "voice" ? "语音助手" : "助手";
+  $("messages").append(bubble(role, text, source, answerModel, $("clock").textContent, assistantName, agent));
   $("messages").scrollTop = $("messages").scrollHeight;
 }
 
@@ -314,24 +350,28 @@ function current(text, active = Boolean(live.mode)) {
 }
 
 function prepare(mode, followupTicket = null) {
+  const voice = mode === "voice";
+  const written = mode === "written";
+  const opening = voice ? "正在建立语音连接" : written ? "正在登记京麦结果" : "正在开始文字会话";
   for (const node of $("messages").querySelectorAll(".msg")) node.remove();
   $("call-empty").hidden = false;
   $("partial").hidden = true;
   $("receipt").hidden = true;
-  $("live-actions").hidden = mode !== "voice";
-  $("no-answer").hidden = mode !== "voice";
+  $("live-actions").hidden = written;
+  $("no-answer").hidden = written;
   $("no-answer").disabled = true;
   $("hangup").disabled = true;
   $("hangup").textContent = "结束通话";
   $("live-latency").textContent = "—";
   $("live-interrupt").textContent = "0 次";
   $("clock").textContent = "00:00";
-  $("mode").textContent = mode === "voice" ? "WebRTC" : "待回写";
-  $("dialog-title").textContent = mode === "voice" ? (followupTicket ? "回电实时转写" : "实时转写") : "京麦处理记录";
-  $("dialog-hint").textContent = mode === "voice" ? "正在建立语音连接。" : "正在登记京麦结果。";
+  $("mode").textContent = voice ? "WebRTC" : written ? "待回写" : "文字会话";
+  $("dialog-title").textContent = voice ? (followupTicket ? "回电实时转写" : "实时转写")
+    : written ? "京麦处理记录" : followupTicket ? "回电文字记录" : "文字沟通记录";
+  $("dialog-hint").textContent = opening + "。";
   $("message-input").value = "";
   $("composer-idle").hidden = false;
-  $("composer-idle").textContent = mode === "voice" ? "正在建立连接…" : "正在登记京麦结果…";
+  $("composer-idle").textContent = opening + "…";
   $("manual-example").open = false;
   Object.assign(live, {mode, id: null, closing: false, done: false, start: performance.now(),
     speaking: false, playing: false, lastMic: null, end: null, waiting: null, latencies: [], interrupts: 0, lastStats: 0,
@@ -343,7 +383,7 @@ function prepare(mode, followupTicket = null) {
 }
 
 function reply(data) {
-  append("assistant", data.text, data.source, data.answer_model);
+  append("assistant", data.text, data.source, data.answer_model, data.dialogue_agent);
   stages(data.stages);
   live.writePending = data.state === "write_pending";
   $("no-answer").disabled = Boolean(data.verified || live.writePending);
@@ -365,7 +405,8 @@ function reply(data) {
     const first = !live.accepting;
     live.accepting = true;
     renderInputControls();
-    if (first && live.mode === "voice" && !live.mic) $("message-input").focus();
+    if (live.mode === "text") current("等待商家回复");
+    if (first && !live.mic && live.mode !== "written") $("message-input").focus();
     return;
   }
   live.done = true;
@@ -392,7 +433,7 @@ function reply(data) {
   $("manual-example").hidden = true;
   renderInputControls();
   readWorkItems().catch(() => {});
-  if (live.mode === "text") disconnect("处理结果已登记");
+  if (live.mode !== "voice") disconnect("处理结果已登记");
 }
 
 function send(type, properties = {}) {
@@ -514,14 +555,23 @@ async function setMicrophone(enabled) {
 
 async function startVoice(withMicrophone, followupTicket = null) {
   const caseId = live.selected;
-  if (!followupTicket && taskList.find((item) => item.id === caseId)?.route === "jingmai") return registerJingmai();
+  if (!followupTicket && taskList.find((item) => item.id === caseId)?.route === "jingmai") return startText(null, "written");
   const record = $("record").checked;
   prepare("voice", followupTicket);
   current("正在连接音频");
-  live.context = new AudioContext();
+  try {
+    live.pc = new window.RTCPeerConnection({iceServers: []});
+    live.context = new window.AudioContext();
+  } catch {
+    browserVoice = false;
+    renderReadiness();
+    await disconnect("暂时未连接");
+    if (!withMicrophone) return startText(followupTicket);
+    error(browserVoiceHint);
+    return;
+  }
   await live.context.resume();
-  const pc = new RTCPeerConnection({iceServers: []});
-  live.pc = pc;
+  const pc = live.pc;
   live.sender = pc.addTransceiver("audio", {direction: "sendrecv"}).sender;
   if (withMicrophone) {
     try { await setMicrophone(true); }
@@ -572,13 +622,20 @@ async function startVoice(withMicrophone, followupTicket = null) {
   }, 10000);
 }
 
-async function registerJingmai() {
+async function startText(followupTicket = null, mode = "text") {
   const caseId = live.selected;
-  prepare("text");
-  current("正在登记京麦结果");
-  const response = await request("/api/text", {case_id: caseId});
+  prepare(mode, followupTicket);
+  current(mode === "text" ? "正在开始文字会话" : "正在登记京麦结果");
+  const payload = {case_id: caseId};
+  if (followupTicket) payload.followup_ticket = followupTicket;
+  const response = await request("/api/text", payload);
   live.id = response.session_id;
   reply(response);
+  if (followupTicket && !live.done) readWorkItems().catch(() => {});
+}
+
+function startManual(followupTicket = null) {
+  return voiceReady() ? startVoice(false, followupTicket) : startText(followupTicket);
 }
 
 async function disconnect(label) {
@@ -592,7 +649,7 @@ async function disconnect(label) {
   $("partial").hidden = true;
   $("microphone").hidden = true;
   $("composer-idle").hidden = false;
-  const written = mode === "text";
+  const written = mode === "written";
   $("composer-idle").textContent = live.done ? "本次处理已结束，可查看回执及质检" : "通话接通后，可在此输入商家回复";
   $("mode").textContent = live.done ? "已结束" : "未连接";
   $("dialog-hint").textContent = live.done
@@ -600,6 +657,7 @@ async function disconnect(label) {
     : written ? "结果尚未登记，可重新办理。" : "连接已结束，可以重新发起通话。";
   current(label, false);
   live.pc = null;
+  live.context = null;
   live.dc = null;
   live.sender = null;
   live.mic = null;
@@ -622,7 +680,19 @@ async function disconnect(label) {
 async function command(type) {
   if (!live.id || live.done) return;
   if (live.mode === "voice") send(type);
-  if (live.mode === "text") reply(await request("/api/text/" + live.id + "/terminal", {command: type}));
+  else await textAction("terminal", {command: type});
+}
+
+async function textAction(path, payload) {
+  if (live.textBusy) return;
+  live.textBusy = true;
+  try {
+    const data = await request(`/api/text/${live.id}/${path}`, payload);
+    if (payload.text) append("user", payload.text);
+    reply(data);
+  } finally {
+    live.textBusy = false;
+  }
 }
 
 function med(values) {
@@ -773,7 +843,9 @@ async function readQuality(id) {
     exports.append(link);
   }
   const transcript = element("div", "detail-transcript");
-  for (const line of report.transcript) transcript.append(bubble(line.role, line.text, line.source, line.answer_model));
+  for (const line of report.transcript) {
+    transcript.append(bubble(line.role, line.text, line.source, line.answer_model, null, "助手", line.dialogue_agent));
+  }
   const evidence = report.receipt ? "回执 " + report.receipt + (report.ticket ? " · 工单 " + report.ticket : "") : "此通话尚未回写";
   const stats = report.audio.rtc_stats;
   const header = element("div", "panel-heading");
@@ -805,39 +877,6 @@ async function readQuality(id) {
   $("quality").replaceChildren(header, tags, info, transcript);
 }
 
-async function readRsi() {
-  const data = await request("/api/rsi");
-  $("revision").textContent = data.active;
-  $("rollback").disabled = data.active === "baseline";
-  $("rsi-list").replaceChildren();
-  if (!data.history.length) $("rsi-list").append(element("div", "empty", "暂无评测记录，点击右上角运行评测。"));
-  for (const run of data.history) {
-    const card = element("details", "rsi-run");
-    card.open = data.history[0] === run;
-    const heading = element("summary");
-    heading.append(element("span", "mono", run.id), element("span", "chip " + (run.activated ? "ok" : "neutral"),
-      run.id === data.active ? "当前使用" : run.activated ? "回归通过" : "保留当前版本"));
-    const metrics = element("div", "metrics");
-    for (const [group, label] of [["dev", "开发集"], ["regression", "回归集"], ["holdout", "封存集"]]) {
-      const before = run.summary[group + "_before"];
-      const after = run.summary[group + "_after"];
-      metrics.append(metric(label + " · " + before.count + " 条", before.passed + " → " + after.passed));
-    }
-    const link = element("a", "link-button", "下载评测记录");
-    link.href = "/api/rsi/" + run.id + "/trace";
-    const patch = Object.entries(run.patch).map(([id, words]) => id + " · " + words.join("、")).join(" ｜ ");
-    const content = element("div");
-    content.append(element("p", "hint", patch ? "新增匹配词：" + patch : "本轮无可验证的新补丁。"), metrics, link);
-    card.append(heading, content);
-    $("rsi-list").append(card);
-  }
-}
-
-function rsiStatus(text) {
-  $("rsi-status").textContent = text;
-  $("rsi-status").hidden = !text;
-}
-
 function run(handler) {
   return async (...args) => {
     try { await handler(...args); }
@@ -864,10 +903,10 @@ for (const button of routeButtons) button.addEventListener("click", () => {
 $("history-search").addEventListener("input", () => filterHistory().catch(showQualityError));
 $("history-filter").addEventListener("change", () => filterHistory().catch(showQualityError));
 $("start").addEventListener("click", run(() => startVoice(true)));
-$("text-start").addEventListener("click", run(() => startVoice(false)));
+$("text-start").addEventListener("click", run(() => startManual()));
 $("refresh-followups").addEventListener("click", run(readWorkItems));
 $("callback-voice").addEventListener("click", run(() => startVoice(true, $("followup-ticket").value)));
-$("callback-text").addEventListener("click", run(() => startVoice(false, $("followup-ticket").value)));
+$("callback-text").addEventListener("click", run(() => startManual($("followup-ticket").value)));
 $("microphone").addEventListener("click", run(() => setMicrophone(!live.mic)));
 $("no-answer").addEventListener("click", run(() => command("no_answer")));
 $("hangup").addEventListener("click", run(() => command($("hangup").textContent === "重试回写" ? "retry" : "hangup")));
@@ -876,42 +915,38 @@ $("text-form").addEventListener("submit", (event) => {
   run(async () => {
     const input = $("message-input");
     const text = input.value.trim();
-    if (!text || live.mode !== "voice" || live.done || input.disabled) return;
+    if (!text || !live.accepting || !live.mode || live.done || live.textBusy || input.disabled) return;
     const callId = live.id;
     error();
     input.disabled = true;
     $("text-send").disabled = true;
     $("text-send").textContent = "处理中";
     try {
-      await request("/api/calls/" + callId + "/turn", {text});
+      if (live.mode === "voice") await request("/api/calls/" + callId + "/turn", {text});
+      else await textAction("turn", {text});
       if (live.id === callId) input.value = "";
     } finally {
       input.disabled = false;
       $("text-send").disabled = false;
       $("text-send").textContent = "发送";
-      if (live.id === callId && live.mode === "voice" && !live.done) input.focus();
+      if (live.id === callId && live.mode && live.accepting && !live.done) input.focus();
     }
   })();
 });
 for (const nav of document.querySelectorAll("nav button")) nav.addEventListener("click", () => navigate(nav.dataset.page));
 $("open-quality").addEventListener("click", () => openCallQuality(live.id));
 $("refresh").addEventListener("click", () => readHistory().catch(showQualityError));
-$("run-rsi").addEventListener("click", async () => {
-  $("run-rsi").disabled = true;
-  rsiStatus("正在重放开发集、回归集和封存集…");
-  try {
-    const result = await request("/api/rsi/run", {});
-    await readRsi();
-    rsiStatus(result.activated ? "回归通过，后续通话将使用新版本。" : "已完成评测，当前版本继续生效。");
-  } catch (err) { rsiStatus(err.message); }
-  finally { $("run-rsi").disabled = false; }
-});
-$("rollback").addEventListener("click", async () => {
-  try { await request("/api/rsi/rollback", {revision: "baseline"}); await readRsi(); rsiStatus("已恢复基线。"); }
-  catch (err) { rsiStatus(err.message); }
-});
+const training = setupTraining({request, element, metric});
+setupAISettings({request, onOutboundChange: renderOutboundModel});
+if (window.location.hash === "#training") navigate("rsi");
 window.addEventListener("pagehide", () => {
-  if (live.mode === "voice" && live.id) navigator.sendBeacon("/api/calls/" + live.id + "/close");
+  if (!live.id) return;
+  if (live.mode === "voice") navigator.sendBeacon("/api/calls/" + live.id + "/close");
+  if (live.mode === "text" && !live.done && !live.writePending) {
+    fetch(`/api/text/${live.id}/terminal`, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({command: "hangup"}), keepalive: true
+    }).catch(() => {});
+  }
 });
 
 function loadWorkbench() {
@@ -919,11 +954,11 @@ function loadWorkbench() {
   $("readiness").textContent = "正在连接服务";
   $("task-list").replaceChildren(element("p", "list-empty", "正在加载任务…"));
   return Promise.all([request("/api/status"), request("/api/cases")]).then(([status, tasks]) => {
-    ready = status.voice;
+    modelsReady = status.voice;
+    renderOutboundModel(status.dialogue_model);
     taskList = tasks;
     $("scene").textContent = status.scene;
-    $("readiness").textContent = ready ? "离线语音就绪" : "语音模型未就绪";
-    $("readiness").className = "service-status " + (ready ? "ok" : "pending");
+    renderReadiness();
     const reference = tasks.filter((task) => task.source_kind === "reference");
     const fixtures = tasks.length - reference.length;
     const scopes = [];
