@@ -7,7 +7,7 @@ const routeLabel = {phone: "电话外呼", jingmai: "京麦书面处理"};
 const routeButtons = [...document.querySelectorAll("[data-route]")];
 const live = {mode: null, id: null, pc: null, dc: null, sender: null, mic: null, context: null,
   inbound: null, outbound: null, start: 0, done: false, closing: false,
-  speaking: false, lastMic: null, end: null, waiting: null, latencies: [], interrupts: 0,
+  speaking: false, playing: false, lastMic: null, end: null, waiting: null, latencies: [], interrupts: 0,
   lastStats: 0, selected: null, accepting: false, micBusy: false, drain: null, drainTimer: null, lastOutput: 0,
   followupTicket: null, writePending: false};
 let ready = false;
@@ -334,7 +334,7 @@ function prepare(mode, followupTicket = null) {
   $("composer-idle").textContent = mode === "voice" ? "正在建立连接…" : "正在登记京麦结果…";
   $("manual-example").open = false;
   Object.assign(live, {mode, id: null, closing: false, done: false, start: performance.now(),
-    speaking: false, lastMic: null, end: null, waiting: null, latencies: [], interrupts: 0, lastStats: 0,
+    speaking: false, playing: false, lastMic: null, end: null, waiting: null, latencies: [], interrupts: 0, lastStats: 0,
     accepting: false, micBusy: false, drain: null, drainTimer: null, lastOutput: 0,
     followupTicket, writePending: false});
   stages();
@@ -412,7 +412,7 @@ function voiceMessage({data: raw}) {
       if (!live.mic) break;
       live.speaking = true;
       live.lastMic = performance.now();
-      current("正在听取商家");
+      if (!live.playing) current("正在听取商家");
       break;
     case "speech_end":
       if (!live.mic) break;
@@ -423,6 +423,7 @@ function voiceMessage({data: raw}) {
     case "utterance": append("user", data.text); current("正在处理"); break;
     case "reply": reply(data); break;
     case "audio_start":
+      live.playing = true;
       $("remote").muted = false;
       current("正在播报");
       live.waiting = data.server_ms != null && live.end
@@ -430,6 +431,7 @@ function voiceMessage({data: raw}) {
       live.end = null;
       break;
     case "audio_end":
+      live.playing = false;
       if (live.done) {
         current("处理结果已登记");
         live.drain = performance.now();
@@ -441,7 +443,9 @@ function voiceMessage({data: raw}) {
       } else current(live.writePending ? "等待回写" : "等待商家回应");
       break;
     case "interrupted":
+      live.playing = false;
       $("remote").muted = true;
+      current(live.speaking ? "正在听取商家" : "正在处理");
       live.waiting = null;
       live.interrupts += 1;
       $("live-interrupt").textContent = live.interrupts + " 次";
@@ -789,6 +793,12 @@ async function readQuality(id) {
       element("p", "notice-text", `处理指引　${report.written.action}`),
       element("p", "", report.written.source)
     );
+  }
+  if (report.audio.delivery_samples) {
+    info.append(element("p", "", `合成音频断续 ${report.audio.underrun_responses}/${report.audio.delivery_samples} 段 · ${ms(report.audio.underrun_ms)}`));
+  }
+  if (report.audio.empty_barge_in_ignored) {
+    info.append(element("p", "", `空识别未打断播报 ${report.audio.empty_barge_in_ignored} 次`));
   }
   if (stats) info.append(element("p", "", "WebRTC 抖动 " + ms(stats.jitter_ms) + " · 丢包 " + (stats.loss ?? "—")));
   info.append(exports);

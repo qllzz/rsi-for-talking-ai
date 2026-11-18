@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 import re
 import time
@@ -21,13 +22,26 @@ RTC_RATE = 48000
 WINDOW = 512
 FRAME = 960
 MODELS = ROOT / "models"
-REQUIRED = ("asr/model.int8.onnx", "asr/tokens.txt", "asr/bbpe.model", "silero_vad.onnx",
-            "tts/model.int8.onnx", "tts/lexicon.txt", "tts/tokens.txt", "tts/number.fst", "tts/phone.fst",
-            "tts/date.fst")
+ASR_FILES = ("asr/model.int8.onnx", "asr/tokens.txt", "asr/bbpe.model", "silero_vad.onnx")
+MATCHA_DIR = "matcha-icefall-zh-en"
+VOCOS = "vocos-16khz-univ.onnx"
+MATCHA_FILES = ("model-steps-3.onnx", "tokens.txt", "lexicon.txt", "date-zh.fst", "number-zh.fst",
+                "phone-zh.fst", "espeak-ng-data/phondata")
+MELO_FILES = ("model.int8.onnx", "lexicon.txt", "tokens.txt", "number.fst", "phone.fst", "date.fst")
 
 
-def missing_models():
-    return [name for name in REQUIRED if not (MODELS / name).is_file()]
+def speech_engine(engine=None):
+    engine = engine or os.environ.get("ZHIYU_TTS_ENGINE", "matcha")
+    if engine not in {"matcha", "melo"}:
+        raise ValueError("ZHIYU_TTS_ENGINE 必须为 matcha 或 melo")
+    return engine
+
+
+def missing_models(engine=None):
+    tts_files = ((VOCOS, *(f"{MATCHA_DIR}/{file}" for file in MATCHA_FILES)) if speech_engine(engine) == "matcha"
+                 else tuple(f"tts/{file}" for file in MELO_FILES))
+    required = (*ASR_FILES, *tts_files)
+    return [name for name in required if not (MODELS / name).is_file()]
 
 
 def native_path(path):
@@ -48,8 +62,9 @@ def pcm(samples):
 
 
 class SpeechModels:
-    def __init__(self):
-        missing = missing_models()
+    def __init__(self, *, engine=None):
+        self.tts_engine = speech_engine(engine)
+        missing = missing_models(self.tts_engine)
         if missing:
             raise FileNotFoundError("缺少离线模型 " + ", ".join(missing))
         asr = MODELS / "asr"
@@ -57,24 +72,49 @@ class SpeechModels:
             tokens=native_path(asr / "tokens.txt"), model=native_path(asr / "model.int8.onnx"), num_threads=2,
             sample_rate=ASR_RATE, feature_dim=80, decoding_method="greedy_search")
         self.asr_lock = Lock()
-        tts = MODELS / "tts"
-        vits = sherpa_onnx.OfflineTtsVitsModelConfig(
-            model=native_path(tts / "model.int8.onnx"), lexicon=native_path(tts / "lexicon.txt"),
-            tokens=native_path(tts / "tokens.txt"), noise_scale=0.45, noise_scale_w=0.55)
-        config = sherpa_onnx.OfflineTtsConfig(
-            model=sherpa_onnx.OfflineTtsModelConfig(vits=vits, num_threads=3, provider="cpu"),
-            rule_fsts=",".join(native_path(tts / name) for name in ("phone.fst", "date.fst", "number.fst")),
-            max_num_sentences=1)
-        if not config.validate():
-            raise ValueError("TTS 模型配置不完整")
-        self.tts = sherpa_onnx.OfflineTts(config)
+        self.tts_speed = float(os.environ.get("ZHIYU_TTS_SPEED", "1.0" if self.tts_engine == "matcha" else "1.1"))
+        if not math.isfinite(self.tts_speed) or not 0.8 <= self.tts_speed <= 1.25:
+            raise ValueError("ZHIYU_TTS_SPEED 必须在 0.8 到 1.25 之间")
+        self.tts = self._load_tts()
         self.tts_lock = Lock()
 
+    def _load_tts(self):
+        if self.tts_engine == "matcha":
+            folder = MODELS / MATCHA_DIR
+            custom = ROOT / "data" / "matcha_zh.lexicon"
+            lexicon = ",".join(map(native_path, (custom, folder / "lexicon.txt")))
+            matcha = sherpa_onnx.OfflineTtsMatchaModelConfig(
+                acoustic_model=native_path(folder / "model-steps-3.onnx"), vocoder=native_path(MODELS / VOCOS),
+                lexicon=lexicon, tokens=native_path(folder / "tokens.txt"), data_dir=native_path(folder / "espeak-ng-data"))
+            model = sherpa_onnx.OfflineTtsModelConfig(matcha=matcha, num_threads=3, provider="cpu")
+            return self._create_tts(model, folder, ("phone-zh.fst", "date-zh.fst", "number-zh.fst"))
+
+        folder = MODELS / "tts"
+        vits = sherpa_onnx.OfflineTtsVitsModelConfig(
+            model=native_path(folder / "model.int8.onnx"), lexicon=native_path(folder / "lexicon.txt"),
+            tokens=native_path(folder / "tokens.txt"), noise_scale=0.45, noise_scale_w=0.55)
+        model = sherpa_onnx.OfflineTtsModelConfig(vits=vits, num_threads=3, provider="cpu")
+        return self._create_tts(model, folder, ("phone.fst", "date.fst", "number.fst"))
+
+    @staticmethod
+    def _create_tts(model, folder, rules):
+        config = sherpa_onnx.OfflineTtsConfig(
+            model=model, rule_fsts=",".join(native_path(folder / name) for name in rules),
+            max_num_sentences=1, silence_scale=0.25)
+        if not config.validate():
+            raise ValueError("TTS 模型配置不完整")
+        return sherpa_onnx.OfflineTts(config)
+
     @lru_cache(maxsize=256)
-    def synthesize(self, text, speed=1.10):
+    def synthesize(self, text, speed=None):
         with self.tts_lock:
-            result = self.tts.generate(text, sid=0, speed=speed)
+            result = self.tts.generate(text, sid=0, speed=self.tts_speed if speed is None else speed)
         return np.asarray(result.samples, dtype=np.float32), result.sample_rate
+
+    def parts(self, text):
+        # Matcha can synthesize a full reply before it is played. The older VITS
+        # fallback still delivers complete sentences as they become available.
+        return (text,) if self.tts_engine == "matcha" else clauses(text)
 
     def warm(self):
         self.synthesize("您好。")
@@ -83,7 +123,7 @@ class SpeechModels:
         self.decode(stream)
 
     def prewarm(self, scripts):
-        prefixes = dict.fromkeys(next(clauses(script)) for script in scripts if script)
+        prefixes = dict.fromkeys(next(iter(self.parts(script))) for script in scripts if script)
         for phrase in prefixes:
             self.synthesize(phrase)
 
@@ -98,7 +138,8 @@ class SpeechModels:
         config.silero_vad.model = native_path(MODELS / "silero_vad.onnx")
         config.silero_vad.threshold = 0.50
         config.silero_vad.min_speech_duration = 0.064
-        config.silero_vad.min_silence_duration = 0.26
+        # A short pause at a comma is usually still part of the same customer turn.
+        config.silero_vad.min_silence_duration = 0.42
         config.silero_vad.window_size = WINDOW
         config.sample_rate = ASR_RATE
         config.num_threads = 1
@@ -158,12 +199,10 @@ class Recognizer:
 
 
 def clauses(text):
-    for part in re.findall(r"[^，。！？、；]+[，。！？、；]*", text):
-        while len(part) > 30:
-            yield part[:24]
-            part = part[24:]
-        if part:
-            yield part
+    # Commas and enumeration marks carry phrasing and pronunciation context.
+    for sentence in re.findall(r"[^。！？；!?;\r\n]+[。！？；!?;]*", text):
+        if sentence.strip():
+            yield sentence.strip()
 
 
 class CallRecording:
@@ -195,6 +234,9 @@ class CallRecording:
 
 
 class Playback(AudioStreamTrack):
+    BUFFER_SAMPLES = RTC_RATE * 3 // 10
+    AUDIBLE_PEAK = 164
+
     def __init__(self, first_frame, finished, recording=None):
         super().__init__()
         self.on_first_frame = first_frame
@@ -207,6 +249,9 @@ class Playback(AudioStreamTrack):
         self.first = False
         self.producing = False
         self.active = False
+        self.buffered_samples = 0
+        self.underrun_samples = 0
+        self.waiting_for_buffer = True
 
     def begin(self):
         self.clear()
@@ -215,8 +260,9 @@ class Playback(AudioStreamTrack):
         return self.generation
 
     def add(self, generation, samples):
-        if generation == self.generation:
+        if generation == self.generation and len(samples):
             self.chunks.append(samples)
+            self.buffered_samples += len(samples)
 
     def finish(self, generation):
         if generation == self.generation:
@@ -228,6 +274,9 @@ class Playback(AudioStreamTrack):
         self.first = False
         self.producing = False
         self.active = False
+        self.buffered_samples = 0
+        self.underrun_samples = 0
+        self.waiting_for_buffer = True
 
     async def recv(self):
         if self.started is None:
@@ -242,7 +291,9 @@ class Playback(AudioStreamTrack):
                 await asyncio.sleep(-overdue)
         data = np.zeros(FRAME, dtype=np.int16)
         used = 0
-        while self.chunks and used < FRAME:
+        if self.waiting_for_buffer and (self.buffered_samples >= self.BUFFER_SAMPLES or not self.producing):
+            self.waiting_for_buffer = False
+        while self.chunks and used < FRAME and not self.waiting_for_buffer:
             block = self.chunks[0]
             count = min(FRAME - used, len(block))
             data[used:used + count] = block[:count]
@@ -251,7 +302,11 @@ class Playback(AudioStreamTrack):
                 self.chunks.popleft()
             else:
                 self.chunks[0] = block[count:]
-        if used and not self.first:
+        self.buffered_samples -= used
+        if self.first and self.producing and used < FRAME:
+            self.underrun_samples += FRAME - used
+            self.waiting_for_buffer = True
+        if used and not self.first and ((data > self.AUDIBLE_PEAK).any() or (data < -self.AUDIBLE_PEAK).any()):
             self.first = True
             self.on_first_frame(time.monotonic())
         if not used and self.active and not self.producing:

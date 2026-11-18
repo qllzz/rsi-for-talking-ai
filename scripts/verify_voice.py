@@ -18,9 +18,9 @@ from zhiyu.audio import SpeechModels, pcm
 from zhiyu.knowledge import compact
 
 LINES = [
-    "是的，我是这家店的负责人，你说吧。",
+    "是的，我是负责人，请说。",
     "可以，请给我说明驳回的原因。",
-    "请问授权书要在哪里上传？",
+    "请问怎么上传授权书？",
     "好的，我明白了。",
     "好的，我听清楚了。",
 ]
@@ -66,10 +66,10 @@ def wave_bytes(samples, rate):
     return output.getvalue()
 
 
-def fixtures(models, noise_db):
+def fixtures(models, noise_db, lines):
     results = []
     rng = np.random.default_rng(19)
-    for text in LINES:
+    for text in lines:
         samples, rate = models.synthesize(text, speed=1.08)
         if noise_db is not None:
             noise = rng.normal(0, 1, len(samples))
@@ -91,8 +91,8 @@ def distance(reference, actual):
     return row[-1]
 
 
-def speech_evidence(args, report, trace, shaping):
-    lines = LINES[1:2] if args.hybrid else (LINES if args.interrupt else LINES[:4])
+def speech_evidence(args, report, trace, shaping, lines):
+    lines = lines[1:2] if args.hybrid else (lines if args.interrupt else lines[:4])
     reference = list(map(compact, lines))
     actual = [compact(event["data"]["text"]) for event in trace["events"] if event["type"] == "user"
               and event["data"].get("input_mode") != "text"]
@@ -200,10 +200,14 @@ def run(args):
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
     recordings = output / "screen"
-    asset = fixtures(SpeechModels(), args.noise_db)
+    lines = LINES.copy()
+    if args.weak_network and args.hybrid:
+        lines[1] = "可以，请说吧。"
+    asset = fixtures(SpeechModels(engine=args.fixture_tts), args.noise_db, lines)
     errors = []
     with sync_playwright() as playwright, httpx.Client(base_url=args.url, trust_env=False, timeout=25) as client:
-        assert client.get("/api/status").json()["voice"], "服务端语音模型未就绪"
+        status = client.get("/api/status").json()
+        assert status["voice"], "服务端语音模型未就绪"
         if args.weak_network:
             before_network = client.get("/_test/media-shaping")
             assert before_network.status_code == 200, "请使用 scripts.media_test_server 进行弱网测试"
@@ -256,8 +260,9 @@ def run(args):
             video_path = Path(screen.path())
         browser.close()
 
-    for name, item in (("quality.json", report), ("voice-trace.json", trace),
-                       ("speech-evidence.json", speech_evidence(args, report, trace, shaping))):
+    evidence = speech_evidence(args, report, trace, shaping, lines)
+    evidence["tts_engine"] = status.get("tts_engine")
+    for name, item in (("quality.json", report), ("voice-trace.json", trace), ("speech-evidence.json", evidence)):
         (output / name).write_text(json.dumps(item, ensure_ascii=False, indent=2), encoding="utf-8")
     recording = output / "voice.wav"
     recording.write_bytes(audio.content)
@@ -273,7 +278,12 @@ def run(args):
     assert report["complete"] and report["turns"] >= 3 and not report["severe_output"]
     assert report["audio"]["client_responses"] >= (1 if args.hybrid else 3)
     assert report["audio"]["client_p50"] <= 2000
-    assert not args.interrupt or report["audio"]["interruptions"] >= 1
+    if status.get("tts_engine") == "matcha":
+        assert report["audio"]["delivery_samples"] > 0 and report["audio"]["underrun_ms"] == 0
+    if not args.hybrid:
+        expected_turns = len(LINES) if args.interrupt else len(LINES) - 1
+        assert report["turns"] == expected_turns, "同一句测试输入被切成多轮，或有语音输入丢失"
+        assert report["audio"]["interruptions"] == int(args.interrupt), "打断次数与测试动作不一致"
     if args.weak_network:
         assert all(info["drop"] > 0 for info in shaping["packets"].values()), "未观察到双向注入丢包"
     if args.hybrid:
@@ -289,6 +299,7 @@ if __name__ == "__main__":
     cli = argparse.ArgumentParser(description=__doc__)
     cli.add_argument("--url", default="http://127.0.0.1:8765")
     cli.add_argument("--browser")
+    cli.add_argument("--fixture-tts", choices=("matcha", "melo"), help="选择测试麦克风样音模型")
     cli.add_argument("--output", type=Path, default=Path("runtime/check"))
     cli.add_argument("--interrupt", action="store_true")
     cli.add_argument("--noise-db", type=float)

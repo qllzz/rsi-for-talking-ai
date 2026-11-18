@@ -192,6 +192,7 @@ async def index():
 def status():
     knowledge = state().evolution.get()
     return {"voice": state().speech is not None, "missing": missing_models(), "llm": state().model.enabled,
+            "tts_engine": state().speech.tts_engine if state().speech else None,
             "model": state().model.model if state().model.enabled else None,
             "answer_model": state().answer.model if state().answer.enabled else None,
             "revision": knowledge.revision, "scene": knowledge.title, "scene_version": knowledge.version,

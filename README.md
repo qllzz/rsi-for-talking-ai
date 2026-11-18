@@ -30,6 +30,14 @@ python -X utf8 scripts/launch.py
 
 在 **知识评测** 中点击“运行一轮 RSI”。页面展示开发、回归与封存集结果，展开记录可查看补丁和下载评测日志，并支持回滚。想重复观测首轮改进时回滚至基线，再运行一轮。
 
+### 中文语音播报
+
+默认使用 [Matcha 中文模型与 Vocos 声码器](https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/matcha-icefall-zh-en.html)，在本机 CPU 上合成。启动脚本会安装并校验所需模型。已安装的环境可运行 `.venv/Scripts/python.exe scripts/models.py --tts-only` 单独更新语音，再重启工作台。
+
+助手合成整轮话术后连续播放，保留句内语气和停顿。`data/matcha_zh.lexicon` 可调整业务词读音，每行填完整词组，再为每个汉字填写一个带数字声调的拼音，例如 `重新提交 chong2 xin1 ti2 jiao1`。修改后重启。助手会等待 420 毫秒尾静音，减少在商家短暂停顿时抢答。播报期间，识别到明确的商家发言后可以打断，空识别和“嗯嗯”等应声会让当前播报继续。每通质检记录合成音频的供给中断和拦下的空识别。
+
+`ZHIYU_TTS_SPEED` 可设置 `0.8` 到 `1.25` 之间的语速，Matcha 默认 `1.0`。需要复测旧音色时可设 `ZHIYU_TTS_ENGINE=melo` 并重启。
+
 ## 验证
 
 ### 人工输入

@@ -22,6 +22,7 @@ def inspect(record):
     server_ms = [item["ms"] for item in of("first_audio") if item["ms"] is not None]
     client_ms = [item["ms"] for item in of("client_audio")]
     interruption = of("interrupt")
+    deliveries = of("audio_delivery")
     scopes = [stage for stage in STAGES if stage in stages]
     tools = of("tool")
     result = record["payload"]
@@ -43,6 +44,11 @@ def inspect(record):
                   "client_p50": percentile(client_ms, .50), "client_p95": percentile(client_ms, .95),
                   "interruptions": len(interruption),
                   "interrupt_stop_p95": percentile([x["stop_ms"] for x in interruption], .95),
+                  "delivery_samples": len(deliveries),
+                  "underrun_responses": sum(item["underrun_ms"] > 0 for item in deliveries),
+                  "underrun_ms": round(sum(item["underrun_ms"] for item in deliveries), 1),
+                  "empty_barge_in_ignored": sum(event["reason"] == "asr_empty" for event in of("barge_guard")),
+                  "backchannel_ignored": sum(event["reason"] == "backchannel" for event in of("barge_guard")),
                   "rtc_stats": (of("rtc_stats") or [None])[-1]},
         "transcript": [{"role": event["type"], **event["data"]} for event in events
                        if event["type"] in ("user", "assistant")],

@@ -16,7 +16,7 @@
     {"id":"POP-009","merchant":"白帆商贸","brand":"归湾","name":"品牌方未确认授权","route":"phone","scene_row":28,"reason":"","action":"","scope":["authorization"],"attempt":1}
   ],
   "faq": [
-    {"id":"upload","scopes":["authorization"],"question":"授权资料应该在哪里上传","aliases":["在哪上传","哪里上传","怎么上传","什么位置上传","上传联系方式","授权书位置","上传到哪"],"answer":"请在京麦打开原驳回单据，在授权书对应的位置上传或替换材料，然后重新提交。","source":"驳回外呼QA.xlsx · 高频QA!2"},
+    {"id":"upload","scopes":["authorization"],"question":"授权资料应该在哪里上传","aliases":["在哪上传","哪里上传","在哪传","哪里传","怎么上传","什么位置上传","上传联系方式","授权书位置","上传到哪"],"answer":"请在京麦打开原驳回单据，在授权书对应的位置上传或替换材料，然后重新提交。","source":"驳回外呼QA.xlsx · 高频QA!2"},
     {"id":"check_contact","scopes":["authorization"],"question":"和哪位授权方人员核实","aliases":["谁核实","和谁核实","核实的人","授权方核实"],"answer":"您可以向授权方确认授权信息。涉及具体人员的联系方式，请通过京麦客服核实。","source":"驳回外呼QA.xlsx · 高频QA!3"},
     {"id":"employment","scopes":["authorization"],"question":"哪些材料可作在职证明","aliases":["在职证明","任职证明","官方邮箱","企业微信认证"],"answer":"可准备有企业微信认证或使用品牌方官方邮箱的证明，具体以单据要求和审核结果为准。","source":"驳回外呼QA.xlsx · 高频QA!4"},
     {"id":"shop_name","scopes":["shop"],"question":"店铺名称在哪里修改","aliases":["修改店铺名称","店铺名怎么","改店铺名","店名怎么","店名在哪"],"answer":"可在京麦找客服，进入咨询单客服创建，选择店铺运营类的修改店铺名称。","source":"驳回外呼QA.xlsx · 高频QA!5"},

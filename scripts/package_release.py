@@ -30,6 +30,10 @@ def report(clean, degraded, api, hybrid=False, catalog=None):
     down = shaping["packets"]["downlink"]
     weak_title = "12 dB 合成噪声与弱网混合输入" if degraded.get("mixed_input") else "12 dB 合成噪声与模拟弱网"
     weak_stop = f"{w['interrupt_stop_p95']} ms" if w["interrupt_stop_p95"] is not None else "—"
+    engine_names = {"matcha": "Matcha-TTS 与 Vocos", "melo": "MeloTTS"}
+    engine = engine_names.get(clean.get("tts_engine"), "本地语音模型")
+    clean_underrun = f"{c['underrun_ms']} ms" if c.get("delivery_samples") else "—"
+    weak_underrun = f"{w['underrun_ms']} ms" if w.get("delivery_samples") else "—"
     hybrid_evidence = (
         "浏览器实测在同一会话先用文字输入，再开启麦克风回复，关闭麦克风后继续文字输入。"
         "开场和四轮回复均收听到音频，六个业务阶段及回写均完成。"
@@ -60,7 +64,7 @@ def report(clean, degraded, api, hybrid=False, catalog=None):
 
 ## 环境与口径
 
-在本机 Windows x64、Python 3.13 和 Chrome 上运行。语音服务为本地 CPU 推理。浏览器用合成测试音频作为麦克风输入，经过 WebRTC、VAD、ASR、对话、TTS 和回写。语音结果的统计单位是有效响应轮次。该样本用于检查功能与端到端时延。
+在本机 Windows x64、Python 3.13 和 Chrome 上运行。语音服务使用 {engine} 在本机 CPU 上推理。浏览器用合成测试音频作为麦克风输入，经过 WebRTC、VAD、ASR、对话、TTS 和回写。语音结果的统计单位是有效响应轮次。该样本用于检查功能与端到端时延。
 
 ## 语音与业务闭环
 
@@ -74,6 +78,7 @@ def report(clean, degraded, api, hybrid=False, catalog=None):
 | 服务端首次出包 P50 | {c['server_p50']} ms | {w['server_p50']} ms |
 | 识别字符错误率 | {clean['cer']:.1%} | {degraded['cer']:.1%} |
 | 打断次数 | {c['interruptions']} | {w['interruptions']} |
+| 播报开始后合成供给不足时长 | {clean_underrun} | {weak_underrun} |
 | VAD 估算开口至服务端停止排队 P95 | {c['interrupt_stop_p95']} ms | {weak_stop} |
 | Chrome 下行 RTP 丢包数 | {c['rtc_stats']['loss']} | {w['rtc_stats']['loss']} |
 | 受控上行丢包 / 总包 | — | {up['drop']} / {up['total']} |
@@ -106,7 +111,7 @@ def report(clean, degraded, api, hybrid=False, catalog=None):
 - [弱网加噪质检及时延](证据/弱网加噪-语音指标.json) · [完整事件](证据/弱网加噪-原始记录.json) · [通话录音](证据/弱网加噪.wav)
 - [RSI 逐用例日志](证据/RSI-原始记录.json) · [业务接口验收与回滚](证据/业务接口验收.json)
 
-测量使用浏览器音频能量阈值本地估算播放时延。合成信号经浏览器媒体轨道传输，耳麦和实际室内声学条件仍需赛场复测。当前没有独立统计 VAD 准确率、意图准确率或人工听评的自然度。官方 Mock、未公开评测和统一时延工具待赛方开放。Dockerfile 随源码提供，本机验收走 Windows 原生启动。
+测量使用浏览器音频能量阈值本地估算播放时延。合成供给不足指服务端播放开始后音频缓冲未能填满帧的时间，不含自然停顿和网络侧丢包。合成信号经浏览器媒体轨道传输，耳麦和实际室内声学条件仍需赛场复测。当前没有独立统计 VAD 准确率、意图准确率或人工听评的自然度。官方 Mock、未公开评测和统一时延工具待赛方开放。Dockerfile 随源码提供，本机验收走 Windows 原生启动。
 """
 
 

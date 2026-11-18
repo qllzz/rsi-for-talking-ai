@@ -25,7 +25,7 @@ def build(tmp_path):
 
 def test_closed_loop_and_idempotency(build):
     call, tools, store = build()
-    for text in ("哎，我是商家的负责人", "可以，说吧", "授权书在哪上传", "我明白了"):
+    for text in ("哎，我是商家的负责人", "可以，说吧", "授权书在哪里传", "我明白了"):
         response = call.handle(text)
     report = inspect(store.detail(call.id))
     assert report["complete"] and report["facts_with_source"] == 2

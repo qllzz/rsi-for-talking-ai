@@ -9,10 +9,12 @@ from aiortc import RTCConfiguration, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import MediaStreamError
 from av import AudioResampler
 
-from .audio import ASR_RATE, RTC_RATE, WINDOW, CallRecording, Playback, Recognizer, clauses, pcm, resample
+from .audio import ASR_RATE, RTC_RATE, WINDOW, CallRecording, Playback, Recognizer, pcm, resample
 from .dialog import redact
+from .knowledge import compact
 
 LOG = logging.getLogger(__name__)
+BACKCHANNEL = frozenset("嗯恩哦噢啊唔呃")
 
 
 class VoiceCall:
@@ -38,6 +40,7 @@ class VoiceCall:
         self.closed = False
         self.client_audio = set()
         self.audio_started = set()
+        self.possible_barge_in = None
 
         @self.pc.on("datachannel")
         def channel_available(channel):
@@ -115,6 +118,7 @@ class VoiceCall:
             if self.microphone != enabled:
                 self.microphone = enabled
                 self.mic_revision += 1
+                self.possible_barge_in = None
                 self.dialog.store.log(self.dialog.id, "microphone", enabled=enabled)
         elif kind in {"no_answer", "hangup", "retry"}:
             async with self.lock:
@@ -169,19 +173,36 @@ class VoiceCall:
         for kind, value in notices:
             if kind == "speech_start":
                 self.send("speech_start")
-                if self.playback.active:
-                    self.interrupt(value)
+                self.possible_barge_in = (self.playback.generation, value) if self.playback.active else None
             elif kind == "partial":
                 text = self.dialog.knowledge.transcript(redact(value))
+                key = compact(text)
+                if len(key) >= 2 and not BACKCHANNEL.issuperset(key):
+                    self.confirm_barge_in()
                 self.send("partial", text=text)
             elif kind == "final":
                 text, end, first = value
+                key = compact(text)
                 self.send("speech_end")
-                if text:
+                backchannel = self.possible_barge_in and BACKCHANNEL.issuperset(key)
+                if key and not backchannel:
+                    self.confirm_barge_in()
                     self.launch(self.process(text, end, first, revision))
                 else:
-                    self.dialog.store.log(self.dialog.id, "failure", reason="asr_empty")
+                    if self.possible_barge_in:
+                        self.dialog.store.log(self.dialog.id, "barge_guard", reason="backchannel" if key else "asr_empty")
+                    else:
+                        self.dialog.store.log(self.dialog.id, "failure", reason="asr_empty")
                     self.send("partial", text="")
+                self.possible_barge_in = None
+
+    def confirm_barge_in(self):
+        if self.possible_barge_in is None:
+            return
+        generation, start = self.possible_barge_in
+        self.possible_barge_in = None
+        if self.playback.active and self.playback.generation == generation:
+            self.interrupt(start)
 
     async def process(self, text, end=None, first=None, revision=None):
         async with self.lock:
@@ -207,10 +228,13 @@ class VoiceCall:
     def interrupt(self, speech_start):
         intent = self.result["intent"] if self.result else ""
         self.dialog.interrupt(intent)
+        audible = self.playback.first
+        underrun = self.playback.underrun_samples
         self.cancel_audio()
         ms = round((time.monotonic() - speech_start) * 1000, 1)
-        self.dialog.store.log(self.dialog.id, "interrupt", turn=self.reply_session_turn, stop_ms=ms)
         self.send("interrupted", turn=self.reply_session_turn, stop_ms=ms)
+        self.dialog.store.log(self.dialog.id, "interrupt", turn=self.reply_session_turn, stop_ms=ms)
+        self.log_audio_delivery("interrupted", audible, underrun)
 
     def cancel_audio(self):
         self.playback.clear()
@@ -232,7 +256,7 @@ class VoiceCall:
         start = time.monotonic()
         first = True
         try:
-            for part in clauses(text):
+            for part in self.speech.parts(text):
                 samples, rate = await asyncio.to_thread(self.speech.synthesize, part)
                 if not samples.size:
                     continue
@@ -256,6 +280,13 @@ class VoiceCall:
     def playback_finished(self):
         self.playback_done.set()
         self.send("audio_end", turn=self.reply_session_turn)
+        self.log_audio_delivery("finished", self.playback.first, self.playback.underrun_samples)
+
+    def log_audio_delivery(self, status, audible, underrun_samples):
+        self.dialog.store.log(
+            self.dialog.id, "audio_delivery", turn=self.reply_session_turn, status=status,
+            audible=audible, underrun_ms=round(underrun_samples * 1000 / RTC_RATE, 1),
+        )
 
     async def close(self):
         if self.closed:
