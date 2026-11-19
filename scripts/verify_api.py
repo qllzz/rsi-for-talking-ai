@@ -40,7 +40,9 @@ def run(url, output, require_judge=False):
         assert guard["compliance_intercepted"] == 1 and not guard["facts_with_source"]
         post("/api/rsi/rollback", {"revision": "baseline"})
         run_result = post("/api/rsi/run", {})
-        assert run_result["activated"] and not run_result["regressions"]
+        assert run_result["ready_to_publish"] and not run_result["activated"] and not run_result["regressions"]
+        assert get("/api/rsi")["active"] == "baseline"
+        assert post("/api/rsi/publish", {"revision": run_result["id"]})["active"] == run_result["id"]
         assert get("/api/rsi")["active"] == run_result["id"]
         trace = get(f"/api/rsi/{run_result['id']}/trace")
         checks = run_result["summary"]["holdout_after"]["judge_checks"]

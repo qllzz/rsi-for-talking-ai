@@ -1,10 +1,10 @@
 const $ = (id) => document.getElementById(id);
 const roles = {
   outbound: "用于新的外呼和文字会话。保存时会用一条模拟消息验证接口。",
-  judge: "用于封存集的语义抽检，会向此接口发送评测问题、参考答案和候选答复。",
+  judge: "用于试答和封存集的语义评测。裁判会收到评测问题、参考答案和模型答复，应与外呼模型独立配置。",
 };
 
-export function setupAISettings({request, onOutboundChange}) {
+export function setupAISettings({request, onChange}) {
   const dialog = $("ai-settings-dialog");
   const form = $("ai-settings-form");
   const field = (name) => form.elements.namedItem(name);
@@ -92,8 +92,8 @@ export function setupAISettings({request, onOutboundChange}) {
         feedback(`连接成功，响应耗时 ${(result.latency_ms / 1000).toFixed(2)} 秒。配置尚未更改。`);
       } else {
         fill(result);
-        if (role === "outbound") onOutboundChange(result.enabled ? result.model : null);
-        feedback(role === "outbound" ? "已保存，新会话使用此设置。" : "已保存，下次 RSI 评测使用此设置。");
+        onChange(role, result);
+        feedback(role === "outbound" ? "已保存，新会话使用此设置。" : "已保存，下次试答和评测使用此设置。");
       }
     } catch (error) { feedback(error.message, true); }
     finally { busy = false; renderControls(); }

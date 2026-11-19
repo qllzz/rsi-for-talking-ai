@@ -109,13 +109,18 @@
     </section>
     <section id="rsi" class="page" hidden>
       <div class="heading training-heading">
-        <div><h1>AI 训练</h1><p>维护客服知识和常用话术，评估每次调整的效果。</p></div>
-        <div class="ai-heading-actions"><button class="secondary" type="button" data-ai-settings="judge">AI 接口</button><button id="run-rsi" class="primary" disabled>运行一轮 RSI</button></div>
+        <div><h1>AI 训练</h1><p>编辑知识草稿，对比试答结果，再发布给新会话。</p></div>
+        <div class="ai-heading-actions"><button class="secondary" type="button" data-ai-settings="judge">裁判接口</button><button id="run-rsi" class="primary" type="button" disabled>运行试答</button></div>
       </div>
       <p id="rsi-status" class="rsi-status" role="status" hidden></p>
       <section class="panel training-overview" aria-labelledby="rsi-heading">
         <div class="panel-heading"><h2 id="rsi-heading">RSI 表现</h2><span id="rsi-latest" class="subtle">正在读取评测记录</span></div>
         <div id="rsi-metrics" class="metrics training-metrics"></div>
+      </section>
+      <section class="panel training-trial" aria-labelledby="trial-heading">
+        <div class="panel-heading"><h2 id="trial-heading">试答与发布</h2><button id="publish-rsi" class="primary compact" type="button" disabled>发布知识版本</button></div>
+        <p id="trial-summary" class="training-feedback hint">正在读取试答记录</p>
+        <div id="trial-comparison"></div>
       </section>
       <div class="training-libraries">
         <section class="panel" aria-labelledby="knowledge-heading">
@@ -123,12 +128,12 @@
           <div class="training-tools">
             <label class="search-field"><svg class="icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="material-search" type="search" placeholder="搜索问题、来源或问法" aria-label="搜索训练资料"></label>
             <select id="material-filter" aria-label="资料状态">
-              <option value="all">全部状态</option><option value="reviewed">已审核</option><option value="pending">待评测</option><option value="active">已启用</option><option value="paused">未纳入</option>
+              <option value="all">全部状态</option><option value="reviewed">已审核</option><option value="pending">待试答 / 发布</option><option value="active">已启用</option><option value="paused">未纳入</option>
             </select>
           </div>
           <p id="material-status" class="training-feedback subtle" role="status" hidden></p>
           <ul id="material-list" class="training-list" aria-label="训练资料"></ul>
-          <div class="panel-foot training-foot"><span id="material-count">正在加载资料</span><span>改动通过评测后生效</span></div>
+          <div class="panel-foot training-foot"><span id="material-count">正在加载资料</span><span>草稿通过试答并发布后生效</span></div>
         </section>
         <section class="panel" aria-labelledby="script-heading">
           <div class="panel-heading"><h2 id="script-heading">快速话术</h2><button id="script-favorites" class="secondary compact" type="button" aria-pressed="false">仅看收藏</button></div>
@@ -154,14 +159,27 @@
           <div class="panel-heading"><h2 id="material-title">新增训练资料</h2><button id="material-close" class="secondary compact" type="button">关闭</button></div>
           <div class="material-fields">
             <label>标准问题<input name="question" required maxlength="100"></label>
-            <label>核准答复<textarea name="answer" required maxlength="320" rows="4"></textarea></label>
+            <label><span id="material-answer-label">拟采用答复</span><textarea name="answer" required maxlength="320" rows="4"></textarea></label>
             <div class="material-columns"><label>依据或来源<input name="source" required maxlength="100"></label><label>适用范围<select name="scope" required></select></label></div>
             <label>补充问法 <span class="subtle">选填，每行一种，最多 5 种</span><textarea name="aliases" rows="3" maxlength="510"></textarea></label>
             <p id="material-origin" class="hint" hidden></p>
-            <label class="material-check"><input name="enabled" type="checkbox" checked> 纳入下一轮评测</label>
+            <p id="material-edit-status" class="hint" hidden></p>
+            <label class="material-check"><input name="enabled" type="checkbox" checked> 本次发布后启用此资料</label>
             <p id="material-form-error" class="error" role="alert" hidden></p>
           </div>
-          <div id="material-actions" class="panel-foot material-actions"><button id="material-save" class="primary" type="submit">保存资料</button></div>
+          <div id="material-actions" class="panel-foot material-actions"><button id="material-save" class="primary" type="submit">保存草稿</button></div>
+        </form>
+      </dialog>
+      <dialog id="trial-options-dialog" class="material-dialog" aria-labelledby="trial-options-title">
+        <form id="trial-options-form">
+          <div class="panel-heading"><h2 id="trial-options-title">试答样本</h2><button id="trial-options-close" class="secondary compact" type="button">关闭</button></div>
+          <div class="material-fields">
+            <p id="trial-options-question" class="hint"></p>
+            <label>陌生问法 <span class="subtle">填写和标准问题同义、但未保存为补充问法的另一种问法</span><input name="alternate" maxlength="100" placeholder="留空时由裁判拟定"></label>
+            <label>对照单据 <span class="subtle">选择不应使用这条答复的另一个电话单据</span><select name="contrast_case_id"><option value="">自动选择</option></select></label>
+            <p class="hint">样本仅供此页面运行试答时使用。</p>
+          </div>
+          <div class="panel-foot material-actions"><button class="primary" type="submit">确认试答样本</button></div>
         </form>
       </dialog>
     </section>

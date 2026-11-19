@@ -35,6 +35,11 @@ def lan_access(app, address, network, port):
                 response = JSONResponse({"detail": "请在本机工作台管理 AI 接口"}, status_code=403)
                 await response(scope, receive, send)
                 return
+            if (scope["path"].startswith(("/api/training", "/api/rsi"))
+                    and (scope["method"] not in {"GET", "HEAD"} or scope["path"].endswith("/trace"))):
+                response = JSONResponse({"detail": "请在本机工作台试答、发布、回滚或下载评测记录"}, status_code=403)
+                await response(scope, receive, send)
+                return
         await app(scope, receive, send)
 
     return restricted

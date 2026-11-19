@@ -30,6 +30,7 @@ from .rtc import VoiceCall
 from .settings import router as settings_router
 from .storage import CallResult, MockTools, Store
 from .training import SCOPES, STAGES as SCRIPT_STAGES, MaterialConflict, MaterialInput, MaterialUpdate, material_catalog, quick_scripts
+from .trial import run_trials
 
 RUNTIME = Path(os.environ.get("ZHIYU_RUNTIME", ROOT / "runtime")).resolve()
 WEB = ROOT / "web"
@@ -157,6 +158,19 @@ class Rollback(Payload):
     revision: str = Field(min_length=1, max_length=64)
 
 
+class TrialOptions(Payload):
+    alternate: str | None = Field(default=None, min_length=3, max_length=100)
+    contrast_case_id: str | None = Field(default=None, min_length=1, max_length=48)
+
+
+class TrialRequest(Payload):
+    options: dict[str, TrialOptions] = Field(default_factory=dict, max_length=60)
+
+
+class Publish(Payload):
+    revision: str = Field(pattern=r"^r-[a-f0-9]{12}$")
+
+
 @api.middleware("http")
 async def same_origin(request, next_handler):
     origin = request.headers.get("origin")
@@ -173,6 +187,12 @@ def state():
     return api.state
 
 
+def dialogue_components(services):
+    agent = services.agent if services.agent.enabled else None
+    return {"agent": agent, "resolver": services.model.resolve if services.model.enabled and not agent else None,
+            "answer_assistant": services.answer if services.answer.enabled and not agent else None}
+
+
 def new_dialog(case_id, mode, followup_ticket=None):
     services = state()
     knowledge = services.evolution.get()
@@ -181,12 +201,8 @@ def new_dialog(case_id, mode, followup_ticket=None):
     if mode == "voice" and knowledge.cases[case_id].channel() != "phone" and not followup_ticket:
         raise HTTPException(409, "该单据应通过京麦书面处理。")
     try:
-        agent = services.agent if services.agent.enabled else None
         return Dialogue(knowledge, MockTools(services.store, knowledge), services.store,
-                        case_id, mode, services.model.resolve if services.model.enabled and not agent else None,
-                        answer_assistant=services.answer if services.answer.enabled and not agent else None,
-                        agent=agent,
-                        followup_ticket=followup_ticket)
+                        case_id, mode, followup_ticket=followup_ticket, **dialogue_components(services))
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
 
@@ -382,15 +398,18 @@ def metrics():
 
 @api.get("/api/rsi")
 def rsi():
-    evolution = state().evolution
-    return {"active": evolution.pointer(), "history": evolution.history()}
+    services = state()
+    evolution = services.evolution
+    return {"active": evolution.pointer(), "history": evolution.history(services.ai_versions)}
 
 
 @api.get("/api/training")
 def training_workspace():
     evolution = state().evolution
     knowledge = evolution.get()
-    return {"active": knowledge.revision, "scopes": SCOPES, "stages": SCRIPT_STAGES,
+    trial_cases = [{"id": case.id, "title": case.name, "scopes": case.scope} for case in knowledge.cases.values()
+                   if case.channel() == "phone" and case.reason and case.action]
+    return {"active": knowledge.revision, "scopes": SCOPES, "stages": SCRIPT_STAGES, "trial_cases": trial_cases,
             "materials": material_catalog(knowledge, evolution.materials()), "scripts": quick_scripts(knowledge)}
 
 
@@ -413,14 +432,38 @@ def update_training_material(identifier: str, payload: MaterialUpdate):
 
 
 @api.post("/api/rsi/run")
-async def rsi_run(request: Request):
-    return await asyncio.to_thread(request.app.state.evolution.run)
+async def rsi_run(request: Request, payload: TrialRequest | None = None):
+    services = request.app.state
+    async with services.ai_settings_lock:
+        components = dialogue_components(services)
+        options = payload.model_dump(exclude_none=True)["options"] if payload else {}
+
+        def trial_runner(current, candidate, changes):
+            return run_trials(current, candidate, changes, judge=services.evolution.model,
+                              options=options, **components)
+
+        return await run_in_threadpool(services.evolution.run, trial_runner=trial_runner,
+                                       configuration=services.ai_versions.copy())
+
+
+@api.post("/api/rsi/publish")
+async def rsi_publish(payload: Publish, request: Request):
+    services = request.app.state
+    async with services.ai_settings_lock:
+        try:
+            return await run_in_threadpool(services.evolution.publish, payload.revision, services.ai_versions.copy())
+        except MaterialConflict as exc:
+            raise HTTPException(409, str(exc)) from None
+        except FileNotFoundError:
+            raise HTTPException(404, "找不到该候选版本") from None
 
 
 @api.post("/api/rsi/rollback")
 def rollback(payload: Rollback):
     try:
         return state().evolution.rollback(payload.revision)
+    except MaterialConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except (FileNotFoundError, ValueError):
         raise HTTPException(404, "没有该知识版本") from None
 

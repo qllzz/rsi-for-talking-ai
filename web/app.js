@@ -937,7 +937,10 @@ for (const nav of document.querySelectorAll("nav button")) nav.addEventListener(
 $("open-quality").addEventListener("click", () => openCallQuality(live.id));
 $("refresh").addEventListener("click", () => readHistory().catch(showQualityError));
 const training = setupTraining({request, element, metric});
-setupAISettings({request, onOutboundChange: renderOutboundModel});
+setupAISettings({request, onChange(role, profile) {
+  if (role === "outbound") renderOutboundModel(profile.enabled ? profile.model : null);
+  if (!$("rsi").hidden) training.load();
+}});
 if (window.location.hash === "#training") navigate("rsi");
 window.addEventListener("pagehide", () => {
   if (!live.id) return;

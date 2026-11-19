@@ -206,6 +206,7 @@ select { border: 1px solid #d6dce5; border-radius: 4px; padding: 6px 8px; backgr
 .detail-transcript { max-height: 530px; overflow: auto; padding: 0 16px; }
 .hint { color: var(--muted); line-height: 1.7; font-size: 12px; overflow-wrap: anywhere; }
 .rsi-status { border: 1px solid #ccd9ec; color: #3c5e8e; padding: 10px 14px; background: #f1f5fc; font-size: 12px; margin-bottom: 16px; }
+.rsi-status.training-error { border-color: #e5c3c6; color: #a02f34; background: #fff4f4; }
 .rsi-run { border-bottom: 1px solid var(--line); }
 .rsi-run:last-child { border-bottom: 0; }
 .rsi-run summary { display: flex; align-items: center; gap: 14px; padding: 16px 20px; cursor: pointer; list-style: none; }
@@ -216,7 +217,7 @@ select { border: 1px solid #d6dce5; border-radius: 4px; padding: 6px 8px; backgr
 .rsi-run > div { padding: 0 20px 18px 42px; }
 .rsi-run .metrics { grid-template-columns: repeat(3, 1fr); background: #fafbfc; border: 1px solid var(--line); padding: 14px 0; margin: 12px 0; }
 .rsi-run .metric strong { font-size: 18px; }
-.training-overview, .training-libraries, .training-trend { margin-bottom: 16px; }
+.training-overview, .training-trial, .training-libraries, .training-trend { margin-bottom: 16px; }
 .training-metrics { padding: 16px 0; }
 .training-metrics .metric { min-width: 0; }
 .training-metrics .metric small { display: block; margin-top: 4px; font-size: 11px; }
@@ -247,6 +248,16 @@ select { border: 1px solid #d6dce5; border-radius: 4px; padding: 6px 8px; backgr
 .script-body { padding: 10px 14px 12px 33px; }
 .script-text { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 7px; }
 .training-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 9px; }
+.training-trial > .training-feedback:last-of-type { border-bottom: 0; }
+.trial-group { border-top: 1px solid var(--line); }
+.trial-group > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; cursor: pointer; overflow-wrap: anywhere; }
+.trial-group[open] > summary { background: #f5f7fb; }
+.trial-check { padding: 12px 16px; border-top: 1px solid var(--line); }
+.trial-check-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; }
+.trial-answers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
+.trial-answer { padding: 9px 10px; border: 1px solid var(--line); background: #fafbfc; overflow-wrap: anywhere; }
+.trial-answer dd { margin: 4px 0 0; }
+.trial-reply { white-space: pre-wrap; }
 #script-favorites[aria-pressed="true"] { background: #eef3fc; border-color: #b8cdef; color: var(--blue); }
 .material-dialog { width: min(500px, calc(100% - 30px)); max-height: calc(100dvh - 30px); padding: 0; color: var(--ink); border: 1px solid #d6dce5; border-radius: 5px; box-shadow: 0 12px 35px #202c4029; }
 .material-dialog::backdrop { background: #202c4052; }
@@ -289,6 +300,7 @@ select { border: 1px solid #d6dce5; border-radius: 4px; padding: 6px 8px; backgr
   .training-metrics .metric:nth-child(2) { border: 0; }
   .training-item, .training-tools, .script-item summary { padding-inline: 10px; }
   .rsi-run summary time { display: none; }
+  .trial-answers { grid-template-columns: minmax(0, 1fr); }
   #outbound-ai-model { display: none; }
 }
 @media (min-width: 1600px) { .work-grid { grid-template-columns: 238px minmax(0, 1fr) 294px; gap: 18px; } .messages { padding-inline: 24px; } }

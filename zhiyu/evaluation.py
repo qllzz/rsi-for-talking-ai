@@ -203,6 +203,17 @@ def check_reviewed_answers(current, candidate, baseline):
     return list(issues.values())
 
 
+def training_changes(current, candidate):
+    old = {item["id"]: item for item in current.training}
+    new = {item["id"]: item for item in candidate.training}
+    return [{"id": key, "before": old.get(key), "after": new.get(key)}
+            for key in dict.fromkeys([*old, *new]) if old.get(key) != new.get(key)]
+
+
+def regressions_between(before, after):
+    return [old["id"] for old, new in zip(before["traces"], after["traces"]) if old["ok"] and not new["ok"]]
+
+
 class Evolution:
     def __init__(self, folder, model=None, *, catalog=None):
         self.folder = folder
@@ -211,9 +222,12 @@ class Evolution:
         self.model = model
         self.catalog = catalog
 
-    def pointer(self):
+    def release_state(self):
         file = self.folder / "active.json"
-        return json.loads(file.read_text(encoding="utf-8"))["revision"] if file.exists() else "baseline"
+        return json.loads(file.read_text(encoding="utf-8")) if file.exists() else {"revision": "baseline"}
+
+    def pointer(self):
+        return self.release_state()["revision"]
 
     def get(self, revision=None):
         revision = revision or self.pointer()
@@ -260,9 +274,19 @@ class Evolution:
             self.write("materials.json", materials)
             return record
 
-    def run(self, publish=True):
+    @staticmethod
+    def trial_basis(materials, configuration):
+        raw = json.dumps([materials, configuration], ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def latest_trial(self):
+        path = self.folder / "latest-trial.json"
+        return json.loads(path.read_text(encoding="utf-8"))["revision"] if path.exists() else None
+
+    def run(self, *, trial_runner=None, configuration=()):
         with self.lock:
             current = self.get()
+            materials = self.materials()
             missing_case = "POP-TEST-MISSING" if self.catalog is not None else "POP-009"
             dev = generate("dev", missing_case=missing_case)
             regression = [*generate("regression", missing_case=missing_case), *catalog_regression(current)]
@@ -276,57 +300,97 @@ class Evolution:
             aliases = {key: [word for word in words if word not in baseline.entries[key].aliases]
                        for key, words in aliases.items() if key in baseline.entries}
             revision = "r-" + uuid4().hex[:12]
-            selected = [item for item in self.materials() if item["enabled"]]
+            selected = [item for item in materials if item["enabled"]]
             training = [published_entry(item) for item in selected]
             training_changed = tuple(training) != current.training
             candidate = Knowledge.load(revision, aliases, catalog=self.catalog, training=training)
             after_dev = evaluate(candidate, dev)
             after = evaluate(candidate, regression)
-            regressions = [old["id"] for old, new in zip(before["traces"], after["traces"])
-                           if old["ok"] and not new["ok"]]
+            regressions = regressions_between(before, after)
             checks = check_training(candidate, selected)
             if training_changed:
                 checks["issues"].extend(check_reviewed_answers(current, candidate, baseline))
-            improved = new_aliases and after_dev["passed"] > before_dev["passed"]
-            approved = bool((improved or training_changed and after_dev["passed"] >= before_dev["passed"])
-                            and not regressions and not after["failures"].get("compliance") and not checks["issues"])
-            if approved:
-                self.write(f"{revision}.json", {"aliases": aliases, "training": training, "parent": current.revision})
-            # Holdout is measured after the version decision and is absent from patch generation and gating.
+            changes = training_changes(current, candidate)
+            trial = {"passed": True, "checks": []}
+            if changes:
+                trial = (trial_runner(current, candidate, changes) if trial_runner else
+                         {"passed": False, "checks": [], "reason": "没有配置外呼 AI 试答"})
+            # The holdout may block release, but never contributes to the draft or alias generation.
             holdout = generate("holdout", missing_case=missing_case)
             frozen_before = evaluate(current, holdout, self.model)
-            frozen_after = evaluate(candidate if approved else current, holdout, self.model)
+            frozen_after = evaluate(candidate, holdout, self.model)
+            holdout_regressions = regressions_between(frozen_before, frozen_after)
+            improved = new_aliases and after_dev["passed"] > before_dev["passed"]
+            approved = bool((improved or training_changed and after_dev["passed"] >= before_dev["passed"])
+                            and not regressions and not holdout_regressions and not after["failures"].get("compliance")
+                            and not frozen_after["failures"].get("compliance") and not checks["issues"] and trial["passed"])
+            if approved:
+                self.write(f"candidate-{revision}.json", {"aliases": aliases, "training": training, "parent": current.revision})
             runs = {"dev_before": before_dev, "dev_after": after_dev, "regression_before": before,
                     "regression_after": after, "holdout_before": frozen_before, "holdout_after": frozen_after}
             result = {
                 "id": revision, "time": datetime.now(timezone.utc).isoformat(), "previous": current.revision,
-                "outcome": "accepted" if approved else "rejected", "activated": approved and publish,
+                "outcome": "accepted" if approved else "rejected", "activated": False, "ready_to_publish": approved,
                 "patch": new_aliases, "regressions": regressions, "criteria": JUDGE_VERSION, "seed": SEED,
+                "trial": trial, "holdout_regressions": holdout_regressions,
                 "materials": {"selected": len(selected), "changed": training_changed,
                               **{key: value for key, value in checks.items() if key != "traces"}},
                 "summary": {key: {k: v for k, v in run.items() if k != "traces"} for key, run in runs.items()},
                 "judge_model": self.model.model if self.model and self.model.enabled else None,
             }
-            self.write(f"run-{revision}.json", {**result, "runs": runs, "material_checks": checks["traces"]})
-            if approved and publish:
-                self.write("active.json", {"revision": revision})
+            self.write(f"run-{revision}.json", {**result, "trial_basis": self.trial_basis(materials, configuration),
+                       "runs": runs, "material_checks": checks["traces"]})
+            self.write("latest-trial.json", {"revision": revision})
             return result
 
-    def history(self):
+    def history(self, configuration=()):
         results = []
+        release = self.release_state()
+        published = release.get("published", {})
+        latest = self.latest_trial()
+        basis = self.trial_basis(self.materials(), configuration)
         for path in sorted(self.folder.glob("run-r-*.json"), key=lambda item: item.stat().st_mtime,
                            reverse=True)[:30]:
             data = json.loads(path.read_text(encoding="utf-8"))
             data.pop("runs", None)
             data.pop("material_checks", None)
+            trial_basis = data.pop("trial_basis", None)
+            if data["id"] in published or release["revision"] == data["id"]:
+                data.update(activated=True, ready_to_publish=False)
+            elif data.get("ready_to_publish"):
+                stale = data["id"] != latest or data["previous"] != release["revision"] or trial_basis != basis
+                data.update(ready_to_publish=not stale, stale=stale)
             results.append(data)
         return results
 
+    def publish(self, revision, configuration=()):
+        with self.lock:
+            release = self.release_state()
+            previous = release["revision"]
+            published = release.get("published", {})
+            if revision == previous and revision in published:
+                return {"active": revision, "previous": published[revision]}
+            if revision != self.latest_trial() or revision in published:
+                raise MaterialConflict("只能发布最新且尚未发布的试答版本，请重新试答")
+            run = json.loads((self.folder / f"run-{revision}.json").read_text(encoding="utf-8"))
+            if not run.get("ready_to_publish"):
+                raise MaterialConflict("试答或回归检查尚未通过")
+            if run["previous"] != previous or run["trial_basis"] != self.trial_basis(self.materials(), configuration):
+                raise MaterialConflict("训练资料、使用中的版本或 AI 设置已变更，请重新试答")
+            patch = json.loads((self.folder / f"candidate-{revision}.json").read_text(encoding="utf-8"))
+            self.write(f"{revision}.json", patch)
+            self.write("active.json", {"revision": revision, "published": {**published, revision: previous}})
+            return {"active": revision, "previous": previous}
+
     def rollback(self, revision):
         with self.lock:
+            release = self.release_state()
+            previous = release["revision"]
+            if (REVISION.fullmatch(revision) and (self.folder / f"candidate-{revision}.json").is_file()
+                    and revision not in release.get("published", {})):
+                raise MaterialConflict("该试答版本尚未发布")
             chosen = self.get(revision)
-            previous = self.pointer()
-            self.write("active.json", {"revision": chosen.revision})
+            self.write("active.json", {**release, "revision": chosen.revision})
             self.write(f"rollback-{uuid4().hex[:12]}.json",
                        {"previous": previous, "revision": chosen.revision,
                         "time": datetime.now(timezone.utc).isoformat()})

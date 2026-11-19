@@ -87,9 +87,11 @@ def test_identity_accepts_courteous_confirmation_without_trusting_unrelated_role
 def test_rsi_evidence_and_rollback(tmp_path):
     evolution = Evolution(tmp_path)
     run = evolution.run()
-    assert run["activated"]
+    assert run["ready_to_publish"] and not run["activated"]
+    assert evolution.get().revision == "baseline"
     assert run["summary"]["holdout_after"]["passed"] > run["summary"]["holdout_before"]["passed"]
     assert run["summary"]["holdout_before"]["dataset_sha256"] == run["summary"]["holdout_after"]["dataset_sha256"]
     assert not run["regressions"]
+    assert evolution.publish(run["id"])["active"] == run["id"]
     assert evolution.get().revision == run["id"]
     assert evolution.rollback("baseline")["active"] == "baseline"

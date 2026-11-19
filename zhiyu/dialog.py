@@ -347,7 +347,7 @@ class Dialogue:
             self.verified = False
         return self.finish("ended" if action == "end" else action, response, answer_model=model)
 
-    def handle(self, raw, *, input_mode=None):
+    def handle(self, raw, *, input_mode=None, use_agent=True):
         text = self.knowledge.transcript(redact(raw))[:400]
         key = compact(text)
         self.index += 1
@@ -364,10 +364,12 @@ class Dialogue:
         if self.state == "identity" and self.opening_interrupted:
             self.opening_interrupted = False
             return self.reply(self.knowledge.identity + self.knowledge.opening, "opening")
-        if self.agent:
+        if self.agent and use_agent:
             response = self.agent_turn(text, key, input_mode)
             if response is not None:
                 return response
+        elif self.agent:
+            self.history.append(("user", text))
         return self.handle_rules(text, key, input_mode)
 
     def handle_rules(self, text, key, input_mode):
