@@ -1,7 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const roles = {
   outbound: "用于新的外呼和文字会话。保存时会用一条模拟消息验证接口。",
-  judge: "用于试答和封存集的语义评测。裁判会收到评测问题、参考答案和模型答复，应与外呼模型独立配置。",
+  judge: "用于试答和封存集的语义评测。可以选用与外呼相同的模型，裁判通过单独请求评估问题、参考答案和模型答复。",
 };
 
 export function setupAISettings({request, onChange}) {

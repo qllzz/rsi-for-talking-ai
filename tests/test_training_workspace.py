@@ -43,7 +43,7 @@ def training_client(monkeypatch, tmp_path):
 
     monkeypatch.setattr(evaluation, "generate", smoke_cases)
 
-    def setup(*, fail_role=None, enable_agent=True, enable_judge=True, reject_candidate=False):
+    def setup(*, fail_role=None, enable_agent=True, enable_judge=True, reject_candidate=False, shared_model=False):
         for role, env, token, enabled in (
             ("agent", "ZHIYU_AGENT_CONFIG", AGENT_TOKEN, enable_agent),
             ("judge", "ZHIYU_JUDGE_CONFIG", JUDGE_TOKEN, enable_judge),
@@ -51,20 +51,26 @@ def training_client(monkeypatch, tmp_path):
             profile = tmp_path / f"{role}-profile.json"
             if enabled:
                 profile.write_text(json.dumps({
-                    "url": f"https://{role}.example/v1", "model": f"fixture-{role}",
-                    "token": token,
+                    "url": "https://shared.example/v1" if shared_model else f"https://{role}.example/v1",
+                    "model": "fixture-shared" if shared_model else f"fixture-{role}",
+                    "token": AGENT_TOKEN if shared_model else token,
                 }), encoding="utf-8")
             monkeypatch.setenv(env, str(profile))
 
         requests = {"agent": [], "judge": []}
 
         def provider(request):
-            role = request.url.host.removesuffix(".example")
-            token = {"agent": AGENT_TOKEN, "judge": JUDGE_TOKEN}[role]
-            assert request.url.path == "/v1/chat/completions"
-            assert request.headers["authorization"] == "Bearer " + token
             body = json.loads(request.content)
             raw = body["messages"][-1]["content"]
+            if shared_model:
+                assert request.url.host == "shared.example" and body["model"] == "fixture-shared"
+                role = "agent" if '"utterance"' in raw else "judge"
+                token = AGENT_TOKEN
+            else:
+                role = request.url.host.removesuffix(".example")
+                token = {"agent": AGENT_TOKEN, "judge": JUDGE_TOKEN}[role]
+            assert request.url.path == "/v1/chat/completions"
+            assert request.headers["authorization"] == "Bearer " + token
             assert AGENT_TOKEN not in raw and JUDGE_TOKEN not in raw
             requests[role].append(raw)
             if raw == '请返回 {"ready":true}。':
@@ -162,6 +168,18 @@ def open_call(client, case):
 
 def active(client):
     return api_json(client, "GET", "/api/rsi")["active"]
+
+
+def test_shared_cloud_model_uses_separate_outbound_and_judge_requests(training_client):
+    client, requests = training_client(shared_model=True)
+    with client:
+        draft = add_material(client)
+        result = prepare(client, draft["id"])
+        trial = result["trial"]
+        assert trial["judge_model"] == trial["outbound_model"] == "fixture-shared"
+        assert result["ready_to_publish"] and all(check["passed"] for check in trial["checks"])
+        assert requests["agent"] and requests["judge"]
+        assert publish(client, result["id"])["active"] == result["id"]
 
 
 def test_material_lifecycle_and_version_rollback(training_client):

@@ -93,7 +93,7 @@ uv pip install --python .venv/Scripts/python.exe -r requirements-dev.txt
 
 在 **外呼工作台 → AI 接口** 配置 Chat Completions 基础地址、模型和 API Key，测试后可保存，无需重启。请填写服务商提供的基础地址，格式如 `https://api.example.com/v1`。程序会追加 `/chat/completions`。新会话使用新配置，正在进行的通话沿用原设置。工作台显示 **云端 AI 对话**，由 Agent 组织的回复显示 **AI 回复**。语音识别和播报继续由本机语音模型处理。
 
-在 **AI 训练 → 裁判接口** 可设置独立的语义裁判。编辑知识后需要可用的外呼模型和裁判。裁判核对新问法有没有改变问题含义，以及实答是否符合本轮参考和使用范围。裁判按填写的参考材料评估一致性，发布人负责核对业务来源。优先使用本机裁判，避免把评测问答发至外部接口。两组设置分别保存在本机 `.env.agent.json` 和 `.env.judge.json`。密钥字段留空会保留同一地址的已保存密钥。也可以通过 `ZHIYU_AGENT_URL`、`ZHIYU_AGENT_MODEL` 和 `ZHIYU_AGENT_TOKEN` 或对应的 `ZHIYU_JUDGE_*` 环境变量管理；由环境变量管理时，页面只显示配置。AI 设置、训练修改和发布操作从本机地址进行。
+在 **AI 训练 → 裁判接口** 可设置语义裁判。编辑知识后需要可用的外呼和裁判接口。两种用途可选同一个模型，裁判通过单独请求核对新问法是否同义、实答是否符合参考答案和适用范围。发布人负责核对业务来源。两组设置分别保存在本机 `.env.agent.json` 和 `.env.judge.json`。密钥字段留空会保留同一地址的已保存密钥。也可以通过 `ZHIYU_AGENT_URL`、`ZHIYU_AGENT_MODEL` 和 `ZHIYU_AGENT_TOKEN` 或对应的 `ZHIYU_JUDGE_*` 环境变量管理；由环境变量管理时，页面只显示配置。AI 设置、训练修改和发布操作从本机地址进行。
 
 Agent 根据当前流程阶段、最近对话和商家的原话选择处理方式。场景分类、操作边界和备用话术在 `data/dialogue_policy.json`，表达要求在 `data/dialogue_prompt.md`。本单经审核的原因、整改步骤和适用问答仍由原表及知识库提供。改动提示词或场景规则后重启。Agent 可把多个问题放在同一轮处理；缺少依据时，它会针对具体疑问澄清或建议进一步核实。应用校验身份、业务阶段及引用，执行业务操作成功后才发送回执话术。
 
@@ -139,7 +139,7 @@ docker run --rm --network host -v zhiyu-evidence:/opt/zhiyu/runtime zhiyu-outbou
 
 容器内读取原表时，把赛事原表目录以只读方式挂载至 `/opt/zhiyu/reference`，或挂载到其他目录后设置 `ZHIYU_RULES_FILE`。首次运行完整验收需要提交方提供原表。
 
-本地 FAQ 匹配与 RSI 语义抽检沿用 `ZHIYU_LLM_URL`、`ZHIYU_LLM_MODEL` 和 `ZHIYU_LLM_TOKEN`，期望 OpenAI 兼容的 Chat Completions 与 JSON Schema 输出。比赛环境优先使用本机模型。服务端运行数据保存在 `runtime/`，可用 `ZHIYU_RUNTIME` 另设目录。
+启用云端裁判后，默认启动器会跳过本机 Qwen，即使本机已经下载了模型。也可用 `--no-llm` 明确跳过本机模型。需要本地 FAQ 匹配或本机 RSI 裁判时，可配置 `ZHIYU_LLM_URL`、`ZHIYU_LLM_MODEL` 和 `ZHIYU_LLM_TOKEN`，服务需兼容 Chat Completions 与 JSON Schema。服务端运行数据保存在 `runtime/`，可用 `ZHIYU_RUNTIME` 另设目录。
 
 ## 提交材料
 

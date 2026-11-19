@@ -39,6 +39,19 @@ def prepare(no_fetch, model):
         subprocess.run([str(PYTHON), "scripts/models.py", *(["--llm"] if model else [])], check=True)
 
 
+def remote_judge_enabled(env):
+    check = (
+        "from urllib.parse import urlsplit\n"
+        "from zhiyu.connections import load_connection\n"
+        "profile = load_connection('judge')\n"
+        "loopback = {'127.0.0.1', '::1', 'localhost'}\n"
+        "print(int(bool(profile and profile.enabled and urlsplit(profile.url).hostname not in loopback)))\n"
+    )
+    # The launcher only needs the standard library before the virtual environment is prepared.
+    result = subprocess.run([str(PYTHON), "-c", check], env=env, check=True, capture_output=True, text=True)
+    return result.stdout.strip() == "1"
+
+
 def local_model(env, port):
     binary = ROOT / "models" / "llama" / ("llama-server.exe" if os.name == "nt" else "llama-server")
     weights = ROOT / "models" / "qwen.gguf"
@@ -86,7 +99,7 @@ def main():
     env = os.environ.copy()
     prepare(args.no_fetch, args.fetch_llm)
     model = None
-    if not args.no_llm and not env.get("ZHIYU_LLM_URL"):
+    if not args.no_llm and not env.get("ZHIYU_LLM_URL") and not remote_judge_enabled(env):
         model = local_model(env, args.model_port)
     try:
         print(f"在浏览器打开 http://127.0.0.1:{args.port}", flush=True)
