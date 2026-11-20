@@ -59,6 +59,9 @@ class Store:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS followup_current
                 ON followup_attempts(ticket_id) WHERE status IN ('claimed', 'consumed');
+                CREATE TABLE IF NOT EXISTS callback_schedules (
+                    ticket_id TEXT PRIMARY KEY, scheduled_at INTEGER, version INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS resolved_handoffs (
                     ticket_id TEXT PRIMARY KEY, resolved REAL NOT NULL
                 );
@@ -104,6 +107,9 @@ class Store:
             if attempt["status"] == "consumed":
                 raise ValueError("此回联工单已经处理")
             raise ValueError("此回联工单正在处理")
+        schedule = db.execute('SELECT scheduled_at FROM callback_schedules WHERE ticket_id=?', (ticket_id,)).fetchone()
+        if schedule and schedule['scheduled_at'] is not None and schedule['scheduled_at'] > now:
+            raise ValueError('尚未到预约回电时间，请到期后再领取')
         db.execute("INSERT INTO followup_attempts VALUES (?, ?, ?, 'claimed')", (session_id, ticket_id, now))
 
     def release_followup(self, session_id):
@@ -245,6 +251,45 @@ class Store:
                 ORDER BY t.created DESC LIMIT ?
             """, (time.time() - FOLLOWUP_LEASE_SECONDS, limit)).fetchall()
         return {"notices": list(map(dict, notices)), "tickets": list(map(dict, tickets))}
+
+    @staticmethod
+    def _agenda_rows(db, now, ticket_id=None):
+        query = '''SELECT t.ticket_id AS id,t.case_id,t.session_id,t.created,s.scheduled_at,
+                  COALESCE(s.version,0) AS version,
+                  CASE WHEN a.status='consumed' THEN 'done'
+                       WHEN a.status='claimed' AND a.claimed>? THEN 'in_progress' ELSE 'pending' END AS status
+                  FROM tickets t JOIN results r ON t.session_id=r.session_id
+                  LEFT JOIN callback_schedules s ON s.ticket_id=t.ticket_id
+                  LEFT JOIN followup_attempts a ON a.ticket_id=t.ticket_id AND a.status IN ('claimed','consumed')
+                  WHERE t.kind='callback' '''
+        args = [now - FOLLOWUP_LEASE_SECONDS]
+        if ticket_id is not None:
+            query += ' AND t.ticket_id=?'; args.append(ticket_id)
+        else:
+            query += " AND (a.status IS NULL OR a.status!='consumed')"
+        return [dict(row) for row in db.execute(query + ' ORDER BY s.scheduled_at IS NULL,s.scheduled_at,t.created,t.ticket_id',args)]
+
+    def callback_agenda(self):
+        with self.connect() as db:
+            return self._agenda_rows(db,time.time())
+
+    def schedule_callback(self, ticket_id, scheduled_at, version):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            now = time.time()
+            rows = self._agenda_rows(db,now,ticket_id)
+            if not rows:
+                raise KeyError('找不到回电工单')
+            current = rows[0]
+            if current['status'] != 'pending' or current['version'] != version:
+                raise ValueError('工单已由其他坐席修改、领取或处理，请刷新')
+            if scheduled_at is not None and not int(now) <= scheduled_at <= int(now)+365*86400:
+                raise OverflowError('请选择当前起一年内的回电时间')
+            if current['scheduled_at'] != scheduled_at:
+                db.execute('INSERT INTO callback_schedules VALUES (?,?,?) ON CONFLICT(ticket_id) DO UPDATE SET scheduled_at=excluded.scheduled_at,version=excluded.version', (ticket_id,scheduled_at,version+1))
+                change = {'ticket': ticket_id, 'previous': current['scheduled_at'], 'scheduled_at': scheduled_at,'version':version+1}
+                db.execute('INSERT INTO events(session_id,type,created,data) VALUES (?,?,?,?)',(current['session_id'],'callback_schedule',now,json.dumps(change)))
+            return self._agenda_rows(db,now,ticket_id)[0]
 
     def resolve_handoff(self, ticket_id):
         with self.connect() as db:

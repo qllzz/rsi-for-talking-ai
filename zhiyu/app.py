@@ -27,7 +27,7 @@ from .knowledge import ROOT, REVISION, SCENE_PATH
 from .llm import LanguageModel
 from .quality import inspect, percentile
 from .rtc import VoiceCall
-from .settings import router as settings_router
+from .settings import local_settings, router as settings_router
 from .storage import CallResult, MockTools, Store
 from .training import SCOPES, STAGES as SCRIPT_STAGES, MaterialConflict, MaterialInput, MaterialUpdate, material_catalog, quick_scripts
 from .trial import run_trials
@@ -257,6 +257,29 @@ def cases():
              "source_cell": case.source_cell, "source_route": case.route,
              "last_result": results.get(case.id)}
             for case in state().evolution.get().cases.values()]
+
+
+class CallbackSchedule(Payload):
+    scheduled_at: int | None = Field(..., strict=True)
+    version: int = Field(ge=0, strict=True)
+
+
+@api.get('/api/callback-agenda')
+def callback_agenda():
+    return {'items': state().store.callback_agenda()}
+
+
+@api.post('/api/work-items/{ticket_id}/schedule')
+def schedule_callback(ticket_id: str, payload: CallbackSchedule, request: Request):
+    services = local_settings(request)
+    try:
+        return services.store.schedule_callback(ticket_id, payload.scheduled_at, payload.version)
+    except KeyError:
+        raise HTTPException(404, '找不到回电工单') from None
+    except OverflowError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @api.get("/api/work-items")

@@ -1,3 +1,4 @@
+import {setupAgenda} from './callback-agenda.js';
 import {setupTraining} from "./training.js";
 import {setupAISettings} from "./ai-settings.js";
 
@@ -69,12 +70,16 @@ function navigate(name, selectedHistory = null) {
     button.classList.toggle("selected", button.dataset.page === name);
     button.setAttribute("aria-current", button.dataset.page === name ? "page" : "false");
   }
-  $("page-name").textContent = {work: "外呼工作台", history: "通话记录", rsi: "AI 训练"}[name];
+  $("page-name").textContent = {work: "外呼工作台", agenda: "回电待办", history: "通话记录", rsi: "AI 训练"}[name];
+  if (name === 'agenda') agenda.refresh();
+  if (name === 'work') readWorkItems().catch(err=>error(err.message));
   if (name === "history") readHistory(selectedHistory).catch(showQualityError);
   if (name === "rsi") {
     window.history.replaceState(null, "", "#training");
     training.load();
-  } else if (window.location.hash === "#training") {
+  } else if (name === 'agenda') {
+    window.history.replaceState(null, '', '#callbacks');
+  } else if (['#training','#callbacks'].includes(window.location.hash)) {
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
   }
 }
@@ -244,6 +249,7 @@ function renderFollowups() {
     const label = element("div", "ticket-label");
     label.append(element("span", "mono", ticket.id),
       element("span", "chip neutral", `${kind} · ${ticket.status === "in_progress" ? "处理中" : "待处理"}`));
+    if(ticket.kind==='callback' && ticket.scheduled_at!=null) label.append(element('small','subtle','预约：'+new Date(ticket.scheduled_at*1000).toLocaleString('zh-CN')));
     const actions = element("div", "ticket-actions");
     const review = element("button", "row-link", "查看原记录");
     review.setAttribute("aria-label", `查看工单 ${ticket.id} 的原记录`);
@@ -260,7 +266,7 @@ function renderFollowups() {
     return item;
   });
   $("followup-list").replaceChildren(...rows);
-  const callbacks = tickets.filter((ticket) => ticket.kind === "callback" && ticket.status === "pending");
+  const callbacks = tickets.filter((ticket) => ticket.kind === "callback" && ticket.status === "pending" && (ticket.scheduled_at==null || ticket.scheduled_at<=Date.now()/1000));
   const select = $("followup-ticket");
   const previous = select.value;
   select.replaceChildren(...callbacks.map((item) => new Option(item.id, item.id)));
@@ -285,9 +291,9 @@ async function resolveHandoff(ticket, button) {
 
 async function readWorkItems() {
   const sequence = ++workRequest;
-  const items = await request("/api/work-items");
+  const [items, agendaData] = await Promise.all([request('/api/work-items'), request('/api/callback-agenda')]);
   if (sequence !== workRequest) return;
-  workTickets = items.tickets ?? [];
+  workTickets = [...(items.tickets ?? []).filter(t=>t.kind!=='callback'), ...agendaData.items.map(t=>({...t,kind:'callback'}))];
   renderFollowups();
 }
 
@@ -933,6 +939,13 @@ $("text-form").addEventListener("submit", (event) => {
     }
   })();
 });
+const agenda = setupAgenda({$,element,request,caseFor:id=>taskList.find(t=>t.id===id),openCallQuality,voiceReady,
+  locked:()=>Boolean(live.mode||live.closing),call:async(ticket,voice)=>{
+    if(live.mode||live.closing) throw Error('请先结束当前通话。');
+    const task=taskList.find(t=>t.id===ticket.case_id);if(!task)throw Error('当前目录没有该单据，请刷新工作台。');
+    $('task-scope').value=task.source_kind??'fixture';setCategoryOptions();$('task-category').value='';$('task-search').value='';setRouteFilter('all');
+    renderTasks(task.id);navigate('work');await run(()=>voice?startVoice(true,ticket.id):startText(ticket.id))();
+  }});
 for (const nav of document.querySelectorAll("nav button")) nav.addEventListener("click", () => navigate(nav.dataset.page));
 $("open-quality").addEventListener("click", () => openCallQuality(live.id));
 $("refresh").addEventListener("click", () => readHistory().catch(showQualityError));
@@ -978,6 +991,7 @@ function loadWorkbench() {
       : `内置流程样例 ${fixtures} 条`;
     setCategoryOptions();
     renderTasks("POP-001");
+    if (window.location.hash === '#callbacks') navigate('agenda');
     readWorkItems().catch(() => {});
   }).catch((err) => {
     $("readiness").textContent = "服务未连接";

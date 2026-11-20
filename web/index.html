@@ -24,6 +24,7 @@
     <div class="nav-label">业务管理</div>
     <nav aria-label="主导航">
       <button data-page="work" class="selected" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#icon-phone"/></svg>外呼工作台</button>
+      <button data-page="agenda"><svg class="icon" aria-hidden="true"><use href="#icon-phone"/></svg>回电待办</button>
       <button data-page="history"><svg class="icon" aria-hidden="true"><use href="#icon-list"/></svg>通话记录</button>
       <button data-page="rsi"><svg class="icon" aria-hidden="true"><use href="#icon-chart"/></svg>AI 训练</button>
     </nav>
@@ -98,6 +99,11 @@
           </div>
         </aside>
       </div>
+    </section>
+    <section id="agenda" class="page" hidden>
+      <div class="heading"><div><h1>回电待办</h1><p>按商家约定安排下一次联系。到期后由坐席发起模拟回联，不会自动拨号。</p></div><button id="agenda-refresh" type="button" class="secondary">刷新待办</button></div>
+      <section class="panel"><div class="panel-heading"><h2>待回联工单</h2><label>查看 <select id="agenda-filter" aria-label="筛选回电工单"><option value="all">全部</option><option value="due">已到期</option><option value="planned">未到期</option><option value="open">未排期</option><option value="busy">处理中</option></select></label></div><p id="agenda-summary" class="agenda-note" role="status"></p><div id="agenda-items"></div><p id="agenda-feedback" class="agenda-note" role="status"></p></section>
+      <dialog id="agenda-dialog" aria-labelledby="agenda-title"><form id="agenda-form"><h2 id="agenda-title">安排回电时间</h2><p id="agenda-target"></p><blockquote id="agenda-utterance"></blockquote><label>本机当地时间 <input id="agenda-time" type="datetime-local" required></label><p class="subtle">请按约定登记未来一年内的时间；没有约定可保留为「未排期」。</p><p role="alert" id="agenda-error"></p><div class="agenda-actions"><button type="button" id="agenda-cancel" class="secondary">返回</button><button class="primary" id="agenda-save">保存排期</button></div></form></dialog>
     </section>
     <section id="history" class="page" hidden>
       <div class="heading"><div><h1>通话记录</h1><p>查看沟通过程、质检指标与业务回写结果。</p></div><button id="refresh" class="secondary"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg>刷新记录</button></div>
